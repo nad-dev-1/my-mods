@@ -22,6 +22,12 @@ export type MainPicks = { model: Pick | null; effort: Pick | null }
 /** The subagent overrides for this project; '' is Auto. */
 export type SubPicks = { model: string; effort: string }
 
+/** Tokens the main session's replies used, summed this session. */
+export type Tokens = { input: number; output: number; cacheRead: number; cacheWrite: number }
+
+/** The working folder's git state, refreshed after replies and on a timer. */
+export type GitInfo = { branch: string; added: number; removed: number }
+
 declare module 'claude-code' {
   interface PluginState {
     'employee-control-panel': {
@@ -34,6 +40,8 @@ declare module 'claude-code' {
       /** The effort last set with /effort, by the model it was set on. */
       seen: Shaped<Record<string, string>>
       sub: Shaped<SubPicks>
+      tokens: Shaped<Tokens>
+      git: Shaped<GitInfo>
     }
   }
 }

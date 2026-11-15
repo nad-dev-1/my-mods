@@ -4,13 +4,19 @@ A Claude Code mod that switches the model and effort level without typing `/mode
 
 ## Using it
 
-The footer under the prompt shows a live session bar, then the **◆ Control Tools ∧** button:
+The footer under the prompt shows a live session bar on three lines (everything ccstatusline showed, so it can replace it), with the **◆ Control Tools ∧** button at the end of the first:
 
 ```
-◆ Subscription │ ◆ Opus 5.5 │ effort high │ ctx ▰▰▱▱▱▱▱▱▱▱ 18% │ 5h 6% │ ◇ 0 agents │ sub Haiku/low   ◆ Control Tools ∧
+◆ Subscription │ ◆ Opus 5.5 │ effort high │ ctx ▰▰▱▱▱▱▱▱▱▱ 18% · 36.4k │ ◇ 0 agents │ sub Haiku/low   ◆ Control Tools ∧
+5h 6% │ block 2h 10m │ week 41% │ session 1h 05m
+▸ my-project │ ⎇ main +12 −4 │ in 1.2k  out 3.4k  cached 120k  total 125k │ style default
 ```
 
-The effort is colour-coded (low grey, medium blue, high amber, xhigh red, max violet), and the bar updates the moment a pick lands, after each reply, and as agents start and finish. Click the button, or type `/controls`, to open the panel: a spaced `◆ C O N T R O L   T O O L S` header with the current pick on the right, then compact tab rows with the pick highlighted (orange for models, pink for effort):
+- Line 1: plan, model, effort, context (meter, percent, tokens), running agents, any subagent override.
+- Line 2: 5-hour usage, time into the 5-hour window, weekly usage, time since the session started.
+- Line 3: the working folder, git branch and uncommitted line changes, the tokens this session's replies used, the output style.
+
+The effort is colour-coded (low grey, medium blue, high amber, xhigh red, max violet), and the bar updates the moment a pick lands, after each reply, as agents start and finish, and every 30 seconds for the clocks and git. Click the button, or type `/controls`, to open the panel: a spaced `◆ C O N T R O L   T O O L S` header with the current pick on the right, then compact tab rows with the pick highlighted (orange for models, pink for effort):
 
 - **Main → Model**: Haiku, Sonnet, Opus or Fable, shown with versions (each picks the latest of its family; the one in use shows its live version).
 - **Main → Effort**: Low, Medium, High, XHigh or Max.

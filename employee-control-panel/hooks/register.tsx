@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Alias, Level, MainPicks, SubPicks } from '../types'
+import type { Alias, GitInfo, Level, MainPicks, SubPicks, Tokens } from '../types'
 
 // Employee Control Panel: a "Control Tools" button in the status bar opens a
 // panel to switch the model and effort level of the main session (it runs
@@ -37,6 +37,10 @@ const seen = atom({ plugin: 'employee-control-panel', key: 'seen' } as const, {}
 })
 const AUTO: SubPicks = { model: '', effort: '' }
 const sub = atom({ plugin: 'employee-control-panel', key: 'sub' } as const, AUTO, { shape: 'sub-1' })
+const NO_TOKENS: Tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+const tokens = atom({ plugin: 'employee-control-panel', key: 'tokens' } as const, NO_TOKENS, { shape: 'tokens-1' })
+const NO_GIT: GitInfo = { branch: '', added: 0, removed: 0 }
+const git = atom({ plugin: 'employee-control-panel', key: 'git' } as const, NO_GIT, { shape: 'git-1' })
 
 /** The video's palette: orange accent, pink effort, green for what is live. */
 const C = {
@@ -99,6 +103,43 @@ function meter(pct: number): string {
   const used = Math.max(0, Math.min(10, Math.round(pct / 10)))
 
   return '▰'.repeat(used) + '▱'.repeat(10 - used)
+}
+
+/** 1234 → 1.2k, 120000 → 120k, 2500000 → 2.5M. */
+function fmtK(n: number): string {
+  if (n < 1000) return String(Math.round(n))
+  const [v, unit] = n < 1_000_000 ? [n / 1000, 'k'] : [n / 1_000_000, 'M']
+
+  return `${v >= 100 ? Math.round(v) : Number(v.toFixed(1))}${unit}`
+}
+
+/** 7_800_000 ms → 2h 10m; under an hour → 45m. */
+function fmtDur(ms: number): string {
+  const mins = Math.max(0, Math.floor(ms / 60_000))
+  const h = Math.floor(mins / 60)
+  const m = mins % 60
+
+  return h > 0 ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`
+}
+
+/** The working folder's branch and uncommitted line changes, as git says. */
+async function refreshGit($: E$): Promise<void> {
+  const cwd = await $.session.cwd().catch(() => '')
+  if (!cwd) return
+  const run = (args: string[]) =>
+    $.process.run(['git', '-C', cwd, ...args], { timeoutMs: 5_000 }).catch(() => ({ exitCode: 1, stdout: '' }))
+  const head = await run(['rev-parse', '--abbrev-ref', 'HEAD'])
+  if (head.exitCode !== 0) {
+    await update($, git, () => NO_GIT)
+
+    return
+  }
+  const stat = await run(['diff', '--shortstat', 'HEAD'])
+  const added = Number(/(\d+) insertion/.exec(stat.stdout)?.[1] ?? 0)
+  const removed = Number(/(\d+) deletion/.exec(stat.stdout)?.[1] ?? 0)
+  const next: GitInfo = { branch: head.stdout.trim(), added, removed }
+  const cur = await read($, git)
+  if (cur.branch !== next.branch || cur.added !== added || cur.removed !== removed) await update($, git, () => next)
 }
 
 /** Subscription or API, from how the session signs in (once per load). */
@@ -179,6 +220,9 @@ async function redraw($: E$): Promise<void> {
 // ---------------------------------------------------------------------------
 
 let seq = 0
+
+/** The 30-second refresh of the clocks and git. */
+let timer: { cancel: () => void } | undefined
 
 /** A pick: shown at once (pending), run as the command, then shown as it went. */
 async function pickMain($: E$, kind: 'model' | 'effort', value: string): Promise<void> {
@@ -302,7 +346,13 @@ export const register: Register = on => {
     await update($, main, () => NO_PICKS)
     const stored = await $.store.get(await subKey($)).catch(() => undefined)
     await update($, sub, () => parseSub(stored))
+    await refreshGit($)
     await redraw($)
+    // The clocks and git move on their own: look again every 30 seconds.
+    timer?.cancel()
+    timer = $.clock.every(30_000, () => {
+      void refreshGit($).then(() => redraw($))
+    })
 
     return r
   })
@@ -344,7 +394,19 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
-    if (!(e as { agentId?: string }).agentId) await update($, isBusy, () => false)
+    if (!e.agentId) {
+      await update($, isBusy, () => false)
+      const u = e.usage
+      if (u) {
+        await update($, tokens, cur => ({
+          input: (cur?.input ?? 0) + u.input_tokens,
+          output: (cur?.output ?? 0) + u.output_tokens,
+          cacheRead: (cur?.cacheRead ?? 0) + u.cache_read_input_tokens,
+          cacheWrite: (cur?.cacheWrite ?? 0) + u.cache_creation_input_tokens,
+        }))
+      }
+      await refreshGit($)
+    }
     await redraw($)
 
     return r
@@ -384,7 +446,8 @@ export const register: Register = on => {
     return r
   }).catch(($, e, next) => next(e))
 
-  // The footer row: the live session bar, then the Control Tools button.
+  // The footer: the live session bar on three lines, as ccstatusline drew
+  // them, with the Control Tools button at the end of the first.
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
     const { Box, Button, Text } = $.ui.resolve(e)
     const below = await next(e)
@@ -392,85 +455,150 @@ export const register: Register = on => {
     const open = await read($, isOpen)
     const picks = await read($, main)
     const s = await read($, sub)
+    const t = await read($, tokens)
+    const g = await read($, git)
     const model = await modelNow($)
     const effort = picks.effort?.state === 'pending' ? picks.effort.value : await effortNow($, model)
     const modelPending = picks.model?.state === 'pending'
     const modelText = modelPending ? `${labelOf(picks.model!.value as Alias, model)} …` : prettyModel(model)
     const usage = await $.session.usage().catch(() => undefined)
+    const now = await $.clock.now()
     const ctx = usage?.context.percent
-    const fiveHour = usage?.rateLimits.find(r => r.kind === 'five_hour')?.percentUsed
+    const ctxTokens = usage?.context.tokens
+    const fiveHour = usage?.rateLimits.find(r => r.kind === 'five_hour')
+    const week = usage?.rateLimits.find(r => r.kind === 'seven_day')
+    const blockReset = fiveHour?.resetsAt ? Date.parse(fiveHour.resetsAt) : NaN
+    const blockElapsed = Number.isFinite(blockReset) ? 5 * 3_600_000 - (blockReset - now) : NaN
+    const sessionMs = usage?.startedAt ? now - usage.startedAt : NaN
     const plan = await planOf($, usage?.rateLimits.length ?? 0)
     const agents = (await $.agent.list().catch(() => [])).filter(a => a.status === 'running').length
+    const cwd = await $.session.cwd().catch(() => '')
+    const folder = cwd.split('/').filter(Boolean).pop() ?? ''
+    const style = await $.settings.read({ key: 'outputStyle' as never }).catch(() => undefined)
+    const total = t.input + t.output + t.cacheRead + t.cacheWrite
     const subText = subLabel(s)
     const modes = e.props.modes
-    const sep = (key: string) => (
-      <Text key={key} color={C.rule}>
-        {'  │  '}
+
+    /** One labelled figure: a dim label, then the value in colour. */
+    const seg = (key: string, label: string, value: string, color: string, bold = true) => (
+      <Text key={key}>
+        {label ? <Text color={C.muted}>{`${label} `}</Text> : null}
+        <Text color={color} bold={bold}>
+          {value}
+        </Text>
       </Text>
     )
+    /** Joins the figures of one line with dim bars, skipping the empty ones. */
+    const line = (key: string, parts: (ReturnType<typeof seg> | null)[], tail?: unknown) => {
+      const shown = parts.filter((x): x is ReturnType<typeof seg> => x !== null)
+      const out: unknown[] = []
+      shown.forEach((x, i) => {
+        if (i > 0) {
+          out.push(
+            <Text key={`${key}-sep-${i}`} color={C.rule}>
+              {'  │  '}
+            </Text>,
+          )
+        }
+        out.push(x)
+      })
 
-    return (
-      <Box flexDirection="row">
-        {below ?? (modes.length > 0 ? <Text dimColor>{modes.join(' & ')}</Text> : null)}
-        {below || modes.length > 0 ? <Text>{'   '}</Text> : null}
-        {plan ? (
-          <Text key="seg-plan" color={C.green}>
-            {`◆ ${plan}`}
-          </Text>
-        ) : null}
-        {plan ? sep('sep-plan') : null}
+      return (
+        <Box key={key} flexDirection="row">
+          {out as ReturnType<typeof seg>[]}
+          {tail as ReturnType<typeof seg>}
+        </Box>
+      )
+    }
+
+    const button = (
+      <Button
+        key="open-controls"
+        plain
+        label={open ? 'Close Control Tools' : 'Open Control Tools'}
+        onPress={async () => {
+          // Opened within the press, so it counts as asked for.
+          if (await read($, isOpen)) await closePanel($)
+          else await openPanel($)
+        }}
+      >
+        <Text>{'   '}</Text>
+        <Text backgroundColor={open ? C.orange : C.chip} color={open ? C.white : C.orange} bold>
+          {` ◆ Control Tools ${open ? '∨' : '∧'} `}
+        </Text>
+      </Button>
+    )
+
+    const line1 = line(
+      'line-1',
+      [
+        plan ? seg('seg-plan', '', `◆ ${plan}`, C.green, false) : null,
         <Text key="seg-model" color={modelPending ? C.amber : C.text} bold>
           <Text color={C.blue}>{'◆ '}</Text>
           {modelText}
-        </Text>
-        {sep('sep-model')}
-        <Text key="seg-effort" dimColor={false}>
-          <Text color={C.muted}>{'effort '}</Text>
-          <Text color={effortColor(effort)} bold>
-            {effort || 'default'}
-          </Text>
-        </Text>
-        {ctx !== undefined ? sep('sep-effort') : null}
-        {ctx !== undefined ? (
+        </Text>,
+        seg('seg-effort', 'effort', effort || 'default', effortColor(effort)),
+        ctx !== undefined ? (
           <Text key="seg-ctx">
             <Text color={C.muted}>{'ctx '}</Text>
             <Text color={C.green}>{meter(ctx)}</Text>
             <Text color={pctColor(ctx)} bold>{` ${Math.round(ctx)}%`}</Text>
+            {ctxTokens !== undefined ? <Text color={C.muted}>{` · ${fmtK(ctxTokens)}`}</Text> : null}
           </Text>
-        ) : null}
-        {fiveHour !== undefined ? sep('sep-ctx') : null}
-        {fiveHour !== undefined ? (
-          <Text key="seg-5h">
-            <Text color={C.muted}>{'5h '}</Text>
-            <Text color={pctColor(fiveHour)} bold>{`${Math.round(fiveHour)}%`}</Text>
-          </Text>
-        ) : null}
-        {sep('sep-agents')}
+        ) : null,
         <Text key="seg-agents" color={agents > 0 ? C.blue : C.muted}>
           {`${agents > 0 ? '◆' : '◇'} ${agents} agent${agents === 1 ? '' : 's'}`}
-        </Text>
-        {subText ? sep('sep-sub') : null}
-        {subText ? (
-          <Text key="seg-sub" color={C.muted}>
-            {`sub `}
-            <Text color={C.text}>{subText}</Text>
-          </Text>
-        ) : null}
-        <Text>{'   '}</Text>
-        <Button
-          key="open-controls"
-          plain
-          label={open ? 'Close Control Tools' : 'Open Control Tools'}
-          onPress={async () => {
-            // Opened within the press, so it counts as asked for.
-            if (await read($, isOpen)) await closePanel($)
-            else await openPanel($)
-          }}
-        >
-          <Text backgroundColor={open ? C.orange : C.chip} color={open ? C.white : C.orange} bold>
-            {` ◆ Control Tools ${open ? '∨' : '∧'} `}
-          </Text>
-        </Button>
+        </Text>,
+        subText ? seg('seg-sub', 'sub', subText, C.text, false) : null,
+      ],
+      button,
+    )
+    const line2 = line('line-2', [
+      fiveHour ? seg('seg-5h', '5h', `${Math.round(fiveHour.percentUsed)}%`, pctColor(fiveHour.percentUsed)) : null,
+      Number.isFinite(blockElapsed) ? seg('seg-block', 'block', fmtDur(blockElapsed), C.text, false) : null,
+      week ? seg('seg-week', 'week', `${Math.round(week.percentUsed)}%`, pctColor(week.percentUsed)) : null,
+      Number.isFinite(sessionMs) ? seg('seg-session', 'session', fmtDur(sessionMs), C.text, false) : null,
+    ])
+    const line3 = line('line-3', [
+      folder ? seg('seg-cwd', '', `▸ ${folder}`, C.blue, false) : null,
+      g.branch
+        ? (
+            <Text key="seg-git">
+              <Text color={C.violet}>{`⎇ ${g.branch}`}</Text>
+              {g.added || g.removed ? (
+                <Text>
+                  <Text color={C.green}>{` +${g.added}`}</Text>
+                  <Text color={C.red}>{` −${g.removed}`}</Text>
+                </Text>
+              ) : null}
+            </Text>
+          )
+        : null,
+      total > 0
+        ? (
+            <Text key="seg-tokens">
+              <Text color={C.muted}>{'in '}</Text>
+              <Text color={C.text}>{fmtK(t.input)}</Text>
+              <Text color={C.muted}>{'  out '}</Text>
+              <Text color={C.text}>{fmtK(t.output)}</Text>
+              <Text color={C.muted}>{'  cached '}</Text>
+              <Text color={C.text}>{fmtK(t.cacheRead + t.cacheWrite)}</Text>
+              <Text color={C.muted}>{'  total '}</Text>
+              <Text color={C.text} bold>
+                {fmtK(total)}
+              </Text>
+            </Text>
+          )
+        : null,
+      seg('seg-style', 'style', typeof style === 'string' && style ? style : 'default', C.text, false),
+    ])
+
+    return (
+      <Box flexDirection="column">
+        {below ?? (modes.length > 0 ? <Text dimColor>{modes.join(' & ')}</Text> : null)}
+        {line1}
+        {line2}
+        {line3}
       </Box>
     )
   })

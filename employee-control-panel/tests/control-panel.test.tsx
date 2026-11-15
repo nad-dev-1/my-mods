@@ -181,12 +181,12 @@ test('a /model or /effort typed by hand shows up live', async ($, on) => {
   await start($)
   expect(await barHas($, /effort\s+low/)).toBe(false)
 
-  await $.command.run({ command: 'effort', args: 'low' })
-  await $.command.run({ command: 'model', args: 'haiku' })
+  await $.command.run({ command: 'effort', args: 'low' } as never)
+  await $.command.run({ command: 'model', args: 'haiku' } as never)
   await w.clock.settle()
   expect(await barHas($, /Haiku 5\.5/)).toBe(true)
   // The effort was set on Opus, and Haiku has none recorded yet.
-  await $.command.run({ command: 'effort', args: 'medium' })
+  await $.command.run({ command: 'effort', args: 'medium' } as never)
   expect(await barHas($, /effort\s+medium/)).toBe(true)
 })
 
@@ -230,18 +230,18 @@ test('a subagent model pick overrides every subagent but a fork; Auto leaves the
   const w = world(on)
   await start($)
 
-  await $.agent.spawn({ prompt: 'a', subagentType: 'general-purpose' })
+  await $.agent.spawn({ prompt: 'a', subagentType: 'general-purpose' } as never)
   expect(w.spawns.at(-1)!.model).toBeUndefined()
 
   const ui = await openPanel($, w)
   await ui.press({ key: 'sub-model#haiku' })
-  await $.agent.spawn({ prompt: 'b', subagentType: 'Explore', model: 'opus' })
+  await $.agent.spawn({ prompt: 'b', subagentType: 'Explore', model: 'opus' } as never)
   expect(w.spawns.at(-1)!.model).toBe('haiku')
-  await $.agent.spawn({ prompt: 'c', subagentType: 'fork' })
+  await $.agent.spawn({ prompt: 'c', subagentType: 'fork' } as never)
   expect(w.spawns.at(-1)!.model).toBeUndefined()
 
   await ui.press({ key: 'sub-model#' })
-  await $.agent.spawn({ prompt: 'd', subagentType: 'Explore', model: 'opus' })
+  await $.agent.spawn({ prompt: 'd', subagentType: 'Explore', model: 'opus' } as never)
   expect(w.spawns.at(-1)!.model).toBe('opus')
   await ui.unmount()
 })
@@ -252,9 +252,9 @@ test('a subagent effort pick is set on every Agent call but a fork', async ($, o
   const ui = await openPanel($, w)
 
   await ui.press({ key: 'sub-effort#low' })
-  await $.tool.call({ tool: 'Agent', description: 'd', prompt: 'p', subagent_type: 'general-purpose', effort: 'max' })
+  await $.tool.call({ tool: 'Agent', description: 'd', prompt: 'p', subagent_type: 'general-purpose', effort: 'max' } as never)
   expect(w.calls.at(-1)!.effort).toBe('low')
-  await $.tool.call({ tool: 'Agent', description: 'd', prompt: 'p', subagent_type: 'fork' })
+  await $.tool.call({ tool: 'Agent', description: 'd', prompt: 'p', subagent_type: 'fork' } as never)
   expect(w.calls.at(-1)!.effort).toBeUndefined()
   expect(await barHas($, /sub\s+low/)).toBe(true)
   await ui.unmount()
@@ -271,13 +271,13 @@ test('subagent picks are remembered per project', async ($, on) => {
   // A new session in another project starts on Auto.
   w.root = '/work/other'
   await start($)
-  await $.agent.spawn({ prompt: 'x', subagentType: 'Explore' })
+  await $.agent.spawn({ prompt: 'x', subagentType: 'Explore' } as never)
   expect(w.spawns.at(-1)!.model).toBeUndefined()
 
   // Back in the first project, its picks are back.
   w.root = '/work/app'
   await start($)
-  await $.agent.spawn({ prompt: 'y', subagentType: 'Explore' })
+  await $.agent.spawn({ prompt: 'y', subagentType: 'Explore' } as never)
   expect(w.spawns.at(-1)!.model).toBe('sonnet')
   expect(await barHas($, /sub\s+Sonnet\/high/)).toBe(true)
 })
@@ -297,7 +297,7 @@ test('Close shuts the panel, and the button opens it again', async ($, on) => {
 test('/controls opens the panel', async ($, on) => {
   const w = world(on)
   await start($)
-  await $.command.run({ command: 'controls', args: '' })
+  await $.command.run({ command: 'controls', args: '' } as never)
   expect(w.opens.some(o => o.id === PANE_ID)).toBe(true)
 })
 
@@ -308,7 +308,7 @@ test('the footer shows the live session bar: plan, context, 5h usage and agents'
   }))
   on('agent.list', () => ({ value: [{ id: 'a1', description: 'x', type: 'Explore', status: 'running' }] }))
   await start($)
-  await $.command.run({ command: 'effort', args: 'high' })
+  await $.command.run({ command: 'effort', args: 'high' } as never)
   await w.clock.settle()
 
   expect(await barHas($, /◆ Subscription/)).toBe(true)
@@ -329,4 +329,53 @@ test('the panel shows the video layout: spaced title, current pick, full model n
   expect(texts).toMatch(/Opus 5\.5 · Default/)
   for (const name of ['Haiku 5.5', 'Sonnet 5.5', 'Opus 5.5', 'Fable 5.2', 'XHigh']) expect(texts).toContain(name)
   await ui.unmount()
+})
+
+test('the bar carries everything ccstatusline showed', async ($, on) => {
+  const w = world(on)
+  const now = 1_000_000
+  on('session.usage', () => ({
+    value: {
+      startedAt: now - (65 * 60_000),
+      context: { window: 200_000, tokens: 36_400, percent: 18 },
+      rateLimits: [
+        { kind: 'five_hour', percentUsed: 6, resetsAt: new Date(now + 170 * 60_000).toISOString() },
+        { kind: 'seven_day', percentUsed: 41 },
+      ],
+    },
+  }))
+  on('session.cwd', () => ({ value: '/Users/me/projects/my app' }))
+  const ran = (exitCode: number, stdout: string) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }) as never
+  on('process.run', (_: unknown, e: any) => {
+    const args = e.argv.join(' ')
+    if (args.includes('rev-parse')) return ran(0, 'feature/bar\n')
+    if (args.includes('--shortstat')) return ran(0, ' 3 files changed, 12 insertions(+), 4 deletions(-)\n')
+
+    return ran(1, '')
+  })
+  await start($)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.turn.complete({
+    answer: 'ok', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer',
+    usage: { input_tokens: 1200, output_tokens: 3400, cache_read_input_tokens: 100_000, cache_creation_input_tokens: 20_000, model: IDS.opus },
+  } as never)
+  await w.clock.settle()
+
+  // Line 1: model, effort, context % and bar, context length.
+  expect(await barHas($, /Opus 5\.5/)).toBe(true)
+  expect(await barHas($, /effort/)).toBe(true)
+  expect(await barHas($, /ctx\s+▰▰▱▱▱▱▱▱▱▱\s+18%\s+·?\s*36\.4k/)).toBe(true)
+  // Line 2: 5h usage, block timer (2h 10m into the window), weekly usage, session clock.
+  expect(await barHas($, /5h\s+6%/)).toBe(true)
+  expect(await barHas($, /block\s+2h 10m/)).toBe(true)
+  expect(await barHas($, /week\s+41%/)).toBe(true)
+  expect(await barHas($, /session\s+1h 05m/)).toBe(true)
+  // Line 3: folder, branch and changes, tokens, output style.
+  expect(await barHas($, /my app/)).toBe(true)
+  expect(await barHas($, /feature\/bar\s+\+12\s+−4/)).toBe(true)
+  expect(await barHas($, /in\s+1\.2k/)).toBe(true)
+  expect(await barHas($, /out\s+3\.4k/)).toBe(true)
+  expect(await barHas($, /cached\s+120k/)).toBe(true)
+  expect(await barHas($, /total\s+125k/)).toBe(true)
+  expect(await barHas($, /style\s+default/)).toBe(true)
 })
