@@ -500,7 +500,10 @@ export function registerCleanView(on: On): void {
 
   // The checklist above the prompt, with the button on every screen.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey) return next(e)
+    // What the other mods drew in this band (a cache card, a progress bar):
+    // drawn first and kept, never replaced.
+    const below = await next(e)
+    if (e.props.hasSurvey) return below
     const els = $.ui.resolve(e) as unknown as Els
     const { Box, Text } = els
     const w = Math.max(20, e.props.bodyColumns)
@@ -513,10 +516,14 @@ export function registerCleanView(on: On): void {
     const button = ToggleButton($, els, isOn, compact)
 
     if (!isOn || !l) {
+      // The width goes on Clean View's own rows only: the engine's node may not sit under one.
       return (
-        <Box flexDirection="row" width={w}>
-          <Text>{' '.repeat(Math.max(0, w - btnW))}</Text>
-          {button}
+        <Box flexDirection="column">
+          {below ?? null}
+          <Box flexDirection="row" width={w}>
+            <Text>{' '.repeat(Math.max(0, w - btnW))}</Text>
+            {button}
+          </Box>
         </Box>
       )
     }
@@ -526,12 +533,15 @@ export function registerCleanView(on: On): void {
     const showRows = !(l.phase === 'done' && l.isCollapsed)
     const firstUpcoming = l.tasks.findIndex(t => t.status === 'upcoming')
     return (
-      <Box flexDirection="column" width={w}>
-        <Box flexDirection="row" width={w} justifyContent="space-between">
-          {header}
-          {button}
+      <Box flexDirection="column">
+        {below ?? null}
+        <Box flexDirection="column" width={w}>
+          <Box flexDirection="row" width={w} justifyContent="space-between">
+            {header}
+            {button}
+          </Box>
+          {showRows ? l.tasks.map((t, i) => Row(els, t, i === firstUpcoming, l.phase === 'needsYou', w, tick)) : null}
         </Box>
-        {showRows ? l.tasks.map((t, i) => Row(els, t, i === firstUpcoming, l.phase === 'needsYou', w, tick)) : null}
       </Box>
     )
   }).catch(($, e, next) => next(e))

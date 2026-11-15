@@ -315,3 +315,28 @@ test('beside the Agent Dock: no helper before the plan, and helpers report to th
   expect(all).not.toContain('Price check')
   await ui.unmount()
 })
+
+test('the band keeps what other mods drew there (a cache card), with or without a checklist', async ($, on) => {
+  world(on)
+  // Another mod's card, drawn beneath Clean View in the same band.
+  on('ui.render', { component: 'AbovePrompt' }, ($t: any, e: any) => {
+    const { Text } = $t.ui.resolve(e)
+
+    return <Text>◷ Cache warm 59:49</Text>
+  })
+  await start($)
+
+  // No checklist yet: the toggle row and the other mod's card.
+  const idle = await $.ui.mount({ ...band(100), surface: 'terminal' } as any)
+  expect(await rows(idle)).toMatch(/◷ Cache warm 59:49/)
+  expect(await rows(idle)).toMatch(/Clean View/)
+  await idle.unmount()
+
+  // With a checklist, the card is still there.
+  await begin($, 'Build my landing page')
+  await $.tool.call({ tool: PLAN, steps: ['Sketch it', 'Build it'] } as never)
+  const busy = await $.ui.mount({ ...band(100), surface: 'terminal' } as any)
+  expect(await rows(busy)).toMatch(/◷ Cache warm 59:49/)
+  expect(await rows(busy)).toMatch(/Sketch it/)
+  await busy.unmount()
+})
