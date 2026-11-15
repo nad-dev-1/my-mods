@@ -4,29 +4,127 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { HandoffMode } from '../types'
 import { statusGrid } from './status-grid'
 
+// Cache Clock, after "Mod #3" of Ben AI's "9 Insane Claude Mods" video (itself
+// inspired by Karan Bansal's Cache Tax): a card above the prompt counting down
+// the hour the prompt cache stays warm, an Auto-warm switch that keeps it warm
+// with invisible pings, and a Create Handoff button for ctx-handoff.
+
 /** This session's prompt cache lives an hour after the last request reads it. */
 const TTL_MS = 60 * 60 * 1000
-/** The keep-alive goes out this long before the cache would expire. */
+/** A keep-warm ping goes out this long before the cache would expire. */
 const LEAD_MS = 5 * 60 * 1000
-/** The cheapest message that still makes a request over the cached prefix. */
-const KEEP_ALIVE_TEXT = 'Hi'
-/** `$.store` key of the Keep cache switch, kept across sessions. */
+/** `$.store` keys kept across sessions: the Auto-warm switch and the folded card. */
 const KEEP_STORE = 'keep-cache'
-/** While a turn runs, look again this often instead of sending. */
+const HIDE_STORE = 'card-hidden'
+/** While a turn runs, look again this often instead of pinging. */
 const BUSY_RETRY_MS = 30 * 1000
-/** Under this much time left the countdown shows seconds. */
-const SECONDS_UNDER_MS = 10 * 60 * 1000
+/** A ping refused by a busy API is tried again this long after, while it can still land. */
+const API_RETRY_MS = 60 * 1000
+/** The cold-send guard only holds back a chat at least this large. */
+const GUARD_MIN_TOKENS = 50_000
+/** The bar's length in cells. */
+const BAR_CELLS = 24
+
+/**
+ * The ping: a tool-less question over the chat as the main thread last sent
+ * it, so the API reads the whole prefix from the cache and keeps it warm. It
+ * names no effort, which could make the first fork write the chat again.
+ */
+const PING_PROMPT = 'This is an automated prompt-cache keep-alive, not a task. Reply with the single word OK, straight away, without thinking it over.'
 
 const C = {
   warm: '#3FB950',
   soon: '#D29922',
   cold: '#F85149',
   accent: '#39C5CF',
+  keep: '#58A6FF',
   muted: '#7D8590',
+  track: '#30363D',
   coral: '#F78166',
   coralBright: '#FFA28B',
   ink: '#0D1117',
   sheet: '#161B22',
+}
+
+// $ per million tokens, [cache read, 1h cache write, output], list prices
+// October 2026, from Karan Bansal's Cache Tax (MIT,
+// https://github.com/karanb192/cache-tax). More specific families first.
+const PRICES: Array<[string | RegExp, number, number, number]> = [
+  ['fable-5-1', 0.25, 20, 50],
+  ['mythos-5-1', 0.25, 20, 50],
+  ['fable-5', 1, 20, 50],
+  ['mythos-5', 1, 20, 50],
+  ['opus-5-5', 0.2, 8, 20],
+  ['opus-5', 0.5, 10, 25],
+  [/opus-4(?:-[01])?(?:$|[^-\d]|-20\d{6})/, 1.5, 30, 75],
+  ['opus-4', 0.5, 10, 25],
+  ['sonnet-5-5', 0.1, 4, 10],
+  ['sonnet-5', 0.2, 4, 10],
+  ['sonnet', 0.3, 6, 15],
+  ['haiku-5-5', 0.01, 0.2, 0.5],
+  ['3-5-haiku', 0.08, 1.6, 4],
+  ['haiku-3-5', 0.08, 1.6, 4],
+  ['haiku', 0.1, 2, 5],
+]
+
+/** [cache read, 1h cache write, uncached input, output] $/MTok for a model id; null when unknown. */
+export function priceOf(model: string): [number, number, number, number] | null {
+  const m = model.toLowerCase().replace(/[\s.]+/g, '-')
+  for (const [family, readP, writeP, outP] of PRICES) {
+    // An uncached input token costs half a 1-hour cache write.
+    if (typeof family === 'string' ? m.includes(family) : family.test(m)) return [readP, writeP, writeP / 2, outP]
+  }
+
+  return null
+}
+
+/** The dollar figure of a request's tokens; null for a model with no price. */
+function usdOf(model: string, u: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }): number | null {
+  const p = priceOf(model)
+  if (!p) return null
+  const [readP, writeP, inP, outP] = p
+
+  return (u.cache_read_input_tokens * readP + u.cache_creation_input_tokens * writeP + u.input_tokens * inP + u.output_tokens * outP) / 1e6
+}
+
+export function fmtUsd(usd: number): string {
+  return usd < 10 ? `$${usd.toFixed(2)}` : `$${Math.round(usd)}`
+}
+
+/** 214000 → 214k, 1500000 → 1.5M. */
+export function fmtK(n: number): string {
+  if (n < 1000) return String(Math.round(n))
+  const [v, unit] = n < 1_000_000 ? [n / 1000, 'k'] : [n / 1_000_000, 'M']
+
+  return `${v >= 100 ? Math.round(v) : Number(v.toFixed(1))}${unit}`
+}
+
+/** The video's clock: whole minutes and seconds, 59:49. */
+export function fmtClock(ms: number): string {
+  const seconds = Math.max(0, Math.ceil(ms / 1000))
+
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+}
+
+/** Whole minutes since the cache expired. */
+function fmtAgo(ms: number): string {
+  const minutes = Math.floor(ms / 60000)
+
+  return minutes >= 60 ? `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, '0')}m` : `${minutes}m`
+}
+
+/** The moment the countdown is drawn for: whole seconds, counted from the expiry. */
+function shownTime(now: number, last: number): number {
+  if (last === 0) return Math.floor(now / 60000) * 60000
+  const expires = last + TTL_MS
+  const left = expires - now
+  if (left <= 0) return expires + Math.floor(-left / 60000) * 60000
+
+  return expires - Math.ceil(left / 1000) * 1000
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
 }
 
 /** The small dialog the status-bar Handoff button opens. */
@@ -39,57 +137,26 @@ const lastRequestAt = atom({ plugin: 'cache-handoff', key: 'lastRequestAt' } as 
 const isKeepOn = atom({ plugin: 'cache-handoff', key: 'isKeepOn' } as const, false)
 const isTurnRunning = atom({ plugin: 'cache-handoff', key: 'isTurnRunning' } as const, false)
 const nowAtom = atom({ plugin: 'cache-handoff', key: 'now' } as const, 0)
-const isChoosingHandoff = atom(
-  { plugin: 'cache-handoff', key: 'isChoosingHandoff' } as const,
-  false,
-)
+const isChoosingHandoff = atom({ plugin: 'cache-handoff', key: 'isChoosingHandoff' } as const, false)
 const lastKeepAliveAt = atom({ plugin: 'cache-handoff', key: 'lastKeepAliveAt' } as const, 0)
 const note = atom({ plugin: 'cache-handoff', key: 'note' } as const, '')
+const isHidden = atom({ plugin: 'cache-handoff', key: 'isHidden' } as const, false)
+const pingCount = atom({ plugin: 'cache-handoff', key: 'pingCount' } as const, 0)
+const lastPingRead = atom({ plugin: 'cache-handoff', key: 'lastPingRead' } as const, 0)
+const pingsUsd = atom({ plugin: 'cache-handoff', key: 'pingsUsd' } as const, 0)
+const pausedReason = atom({ plugin: 'cache-handoff', key: 'pausedReason' } as const, '')
+const guardedFor = atom({ plugin: 'cache-handoff', key: 'guardedFor' } as const, 0)
+const warnedFor = atom({ plugin: 'cache-handoff', key: 'warnedFor' } as const, 0)
 
 type Timer = { cancel: () => void }
 
-/** Minutes for a long wait, m:ss under ten minutes. */
-export function fmtLeft(ms: number): string {
-  if (ms >= SECONDS_UNDER_MS) {
-    const minutes = Math.floor(ms / 60000)
-
-    return minutes >= 60 ? `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, '0')}m` : `${minutes}m`
-  }
-  const seconds = Math.max(0, Math.ceil(ms / 1000))
-
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
-}
-
-/**
- * The moment the countdown is drawn for: whole minutes far out, whole seconds
- * near the end, counted from the expiry so the figure changes exactly on it.
- */
-function shownTime(now: number, last: number): number {
-  if (last === 0) return Math.floor(now / 60000) * 60000
-  const expires = last + TTL_MS
-  const left = expires - now
-  if (left <= 0) return expires + Math.floor(-left / 60000) * 60000
-  const step = left < SECONDS_UNDER_MS + 60000 ? 1000 : 60000
-
-  return expires - Math.ceil(left / step) * step
-}
-
-/** Whole minutes since the cache expired. */
-function fmtAgo(ms: number): string {
-  const minutes = Math.floor(ms / 60000)
-
-  return minutes >= 60 ? `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, '0')}m` : `${minutes}m`
-}
-
-function errorText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
-}
-
 // Timers and these flags start over on a reload; `session.start` arms them again.
 let keepAliveTimer: Timer | null = null
+let warnTimer: Timer | null = null
 let ticker: Timer | null = null
 let armGen = 0
 let sawStepThisTurn = false
+let pingInFlight = false
 
 async function say($: EngineInterface, text: string) {
   await update($, note, () => text)
@@ -101,35 +168,76 @@ async function tick($: EngineInterface) {
   if (shown !== (await read($, nowAtom))) await update($, nowAtom, () => shown)
 }
 
-/** Sets the one keep-alive timer from the switch and the last request; clears it otherwise. */
+/** The chat's size as the session last measured it: what a cold send writes again. */
+async function chatTokens($: EngineInterface): Promise<number> {
+  const usage = await $.session.usage().catch(() => undefined)
+
+  return usage?.context.tokens ?? 0
+}
+
+/**
+ * Sets the timers from the switch and the last request: with Auto-warm on, the
+ * ping 5 minutes before expiry; with it off, the warning at the same moment.
+ */
 async function arm($: EngineInterface) {
   const gen = ++armGen
   const keep = await read($, isKeepOn)
   const last = await read($, lastRequestAt)
+  const paused = await read($, pausedReason)
+  const warned = await read($, warnedFor)
   const now = await $.clock.now()
-  // A later arm owns the timer; from here to the assignment nothing awaits.
+  // A later arm owns the timers; from here to the assignments nothing awaits.
   if (gen !== armGen) return
   keepAliveTimer?.cancel()
   keepAliveTimer = null
-  // Nothing cached yet, or already expired: a "Hi" would only re-write it.
-  if (!keep || last === 0 || now >= last + TTL_MS - 2000) return
-  const delay = Math.max(1000, last + TTL_MS - LEAD_MS - now)
-  keepAliveTimer = $.clock.after(delay, () => {
-    void keepAlive($)
-  })
+  warnTimer?.cancel()
+  warnTimer = null
+  // Nothing cached yet, or already expired: a ping would only write it again.
+  if (last === 0 || now >= last + TTL_MS - 2000) return
+  const due = Math.max(1000, last + TTL_MS - LEAD_MS - now)
+  if (keep && paused === '') {
+    keepAliveTimer = $.clock.after(due, () => {
+      void keepAlive($)
+    })
+  } else if (!keep && warned !== last) {
+    warnTimer = $.clock.after(due, () => {
+      void warnCold($)
+    })
+  }
 }
 
-/** Sends the keep-alive when it is still due: switch on, cache warm, no turn running. */
+/** Auto-warm off: one notification, 5 minutes before this hour's cache goes cold. */
+async function warnCold($: EngineInterface) {
+  warnTimer = null
+  if (await read($, isKeepOn)) return
+  const last = await read($, lastRequestAt)
+  const now = await $.clock.now()
+  if (last === 0 || now >= last + TTL_MS || (await read($, warnedFor)) === last) return
+  if (now < last + TTL_MS - LEAD_MS - 1000) return arm($)
+  await update($, warnedFor, () => last)
+  await $.ui
+    .notify('The prompt cache goes cold in 5 minutes. Reply, or switch Auto-warm on, to keep it warm.', { title: 'Cache' })
+    .catch(() => undefined)
+}
+
+/** Stops the pinging and says why; the next reply of the main conversation starts it again. */
+async function pause($: EngineInterface, reason: string) {
+  await update($, pausedReason, () => reason)
+  keepAliveTimer?.cancel()
+  keepAliveTimer = null
+}
+
+/** The ping, when it is still due: switch on, cache warm, no turn running, none in flight. */
 async function keepAlive($: EngineInterface) {
   keepAliveTimer = null
   const gen = armGen
-  if (!(await read($, isKeepOn))) return
+  if (!(await read($, isKeepOn)) || (await read($, pausedReason)) !== '') return
   const last = await read($, lastRequestAt)
   const now = await $.clock.now()
   if (last === 0 || now >= last + TTL_MS) return
   // A request since the timer was set moved the cache clock: schedule from it.
   if (now < last + TTL_MS - LEAD_MS - 1000) return arm($)
-  if (await read($, isTurnRunning)) {
+  if ((await read($, isTurnRunning)) || pingInFlight) {
     if (gen === armGen && !keepAliveTimer) {
       keepAliveTimer = $.clock.after(BUSY_RETRY_MS, () => {
         void keepAlive($)
@@ -138,20 +246,70 @@ async function keepAlive($: EngineInterface) {
 
     return
   }
-  await update($, lastKeepAliveAt, () => now)
+  pingInFlight = true
+  let result: Awaited<ReturnType<EngineInterface['model']['fork']>> | null = null
   try {
-    const sent = await $.prompt.submit({ text: KEEP_ALIVE_TEXT })
-    if (sent.drop !== undefined) await say($, `Keep cache: the "Hi" was not sent (${sent.drop}).`)
-    else await say($, '')
+    result = await $.model.fork({ prompt: PING_PROMPT })
   } catch (err) {
-    await say($, `Keep cache: the "Hi" could not be sent (${errorText(err)}).`)
+    await pause($, `the last ping could not be sent (${errorText(err)})`)
+  } finally {
+    pingInFlight = false
   }
+  if (!result) return
+  const at = await $.clock.now()
+  if (!result.isAnswered) {
+    const status = 'status' in result ? Number(result.status) : 0
+    const busy = result.reason === 'api-error' && (status === 429 || status === 529 || status >= 500)
+    if (busy && at + API_RETRY_MS < last + TTL_MS - 5000) {
+      await say($, `The API was busy (${status}): the ping is tried again in a minute.`)
+      if (gen === armGen) {
+        // Another step may have set a timer while the ping was out.
+        ;(keepAliveTimer as Timer | null)?.cancel()
+        keepAliveTimer = $.clock.after(API_RETRY_MS, () => {
+          void keepAlive($)
+        })
+      }
+
+      return
+    }
+    await pause($, result.reason === 'nothing-to-fork' ? 'there is no conversation to read yet' : `the last ping failed (${result.reason}${status ? ` ${status}` : ''})`)
+
+    return
+  }
+  const u = result.usage
+  const usd = usdOf(await $.session.model().catch(() => ''), u) ?? 0
+  await update($, pingCount, n => (n ?? 0) + 1)
+  await update($, lastPingRead, () => u.cache_read_input_tokens)
+  await update($, pingsUsd, n => (n ?? 0) + usd)
+  await update($, lastKeepAliveAt, () => at)
+  await say($, '')
+  // The safety check: a ping must read the chat from the cache, not write it.
+  if (u.cache_read_input_tokens === 0) {
+    await pause($, 'the last ping found no cache (it had already gone cold), so pinging would only pay to write it again')
+
+    return
+  }
+  if (u.cache_creation_input_tokens >= u.cache_read_input_tokens * 0.1) {
+    await pause($, `the last ping wrote ${fmtK(u.cache_creation_input_tokens)} tokens to the cache instead of only reading it`)
+
+    return
+  }
+  // The read restarted the cache's hour.
+  await update($, lastRequestAt, () => at)
+  await update($, warnedFor, () => 0)
+  await tick($)
+  await arm($)
 }
 
 async function setKeep($: EngineInterface, isOn: boolean) {
   await update($, isKeepOn, () => isOn)
   await $.store.set(KEEP_STORE, isOn).catch(() => undefined)
   await arm($)
+}
+
+async function setHidden($: EngineInterface, hidden: boolean) {
+  await update($, isHidden, () => hidden)
+  await $.store.set(HIDE_STORE, hidden).catch(() => undefined)
 }
 
 /** Runs ctx-handoff's own command: `now` hands off (clears the chat), `dry` only writes it. */
@@ -177,7 +335,7 @@ async function runHandoff($: EngineInterface, mode: HandoffMode) {
   }
 }
 
-/** The status-bar button: a small dialog with the same two choices as the band. */
+/** The status-bar button: a small dialog with the same two choices as the card. */
 async function openChoice($: EngineInterface) {
   const opened = await $.ui.open({
     id: CHOICE_PANE,
@@ -259,19 +417,21 @@ export const register: Register = on => {
     if (!isNotesRequest(system, next.origin.plugin) || system.includes(ENGLISH_NOTES)) return next(e)
 
     return next({ ...e, system: `${system}${ENGLISH_NOTES}` })
-  })
+  }).catch(($, e, next) => next(e))
 
   // Handoff documents in English: add the instruction to ctx-handoff's request.
   on('model.fork', async ($, e, next) => {
     if (!isHandoffRequest(e.prompt, next.origin.plugin) || e.prompt.includes(ENGLISH_HANDOFF)) return next(e)
 
     return next({ ...e, prompt: `${e.prompt}${ENGLISH_HANDOFF}` })
-  })
+  }).catch(($, e, next) => next(e))
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     const kept = await $.store.get(KEEP_STORE).catch(() => undefined)
     await update($, isKeepOn, () => kept === true)
+    const hidden = await $.store.get(HIDE_STORE).catch(() => undefined)
+    await update($, isHidden, () => hidden === true)
     ticker?.cancel()
     ticker = $.clock.every(1000, () => {
       void tick($)
@@ -304,6 +464,9 @@ export const register: Register = on => {
       }
       sawStepThisTurn = false
       await update($, isTurnRunning, () => false)
+      // A reply re-warmed the cache: a paused keep-warm starts again from it.
+      await update($, pausedReason, () => '')
+      await update($, warnedFor, () => 0)
       await tick($)
       await arm($)
       if (queued) {
@@ -316,6 +479,32 @@ export const register: Register = on => {
     return done
   })
 
+  // The cold-send guard: on a cold, large chat, the first message a person
+  // typed is held back once with the rewrite price; sending again goes ahead.
+  on('prompt.submit', async ($, e, next) => {
+    if (e.command || e.isMeta || e.origin.kind !== 'composer') return next(e)
+    const last = await read($, lastRequestAt)
+    const now = await $.clock.now()
+    if (last === 0 || now < last + TTL_MS || (await read($, guardedFor)) === last) return next(e)
+    const tokens = await chatTokens($)
+    if (tokens < GUARD_MIN_TOKENS) return next(e)
+    await update($, guardedFor, () => last)
+    const p = priceOf(await $.session.model().catch(() => ''))
+    const cold = p ? ` (~${fmtUsd((tokens * p[1]) / 1e6)}; a warm reply would have cost ~${fmtUsd((tokens * p[0]) / 1e6)})` : ''
+    // Put the text back, so sending it again is one keypress.
+    const text = e.text
+    $.clock.after(50, () => {
+      void (async () => {
+        const box = await $.prompt.read().catch(() => ({ text: 'x', cursor: 0 }))
+        if (box.text === '') await $.prompt.fill({ text }).catch(() => undefined)
+      })()
+    })
+
+    return {
+      drop: `The prompt cache went cold ${fmtAgo(now - last - TTL_MS)} ago: sending this writes about ${fmtK(tokens)} tokens again${cold}. Send it again to go ahead, or use Create Handoff to start fresh from a summary.`,
+    }
+  }).catch(($, e, next) => next(e))
+
   // A compaction sends the summary request: the new, shorter prefix is cached from now.
   on('session.compact', async ($, e, next) => {
     const done = await next(e)
@@ -326,13 +515,16 @@ export const register: Register = on => {
     }
 
     return done
-  })
+  }).catch(($, e, next) => next(e))
 
   // /clear or a resume starts another conversation: nothing of it is cached yet.
   on('session.end', async ($, e, next) => {
     if (e.reason === 'clear' || e.reason === 'resume') {
       await update($, lastRequestAt, () => 0)
       await update($, isTurnRunning, () => false)
+      await update($, pingCount, () => 0)
+      await update($, lastPingRead, () => 0)
+      await update($, pausedReason, () => '')
       await arm($)
     }
 
@@ -388,6 +580,7 @@ export const register: Register = on => {
     )
   })
 
+  // The card above the prompt.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const rest = await next(e)
     if (e.props.hasSurvey) return rest
@@ -396,18 +589,89 @@ export const register: Register = on => {
     const last = await read($, lastRequestAt)
     const keep = await read($, isKeepOn)
     const choosing = await read($, isChoosingHandoff)
+    const hidden = await read($, isHidden)
     const shownNow = await read($, nowAtom)
     const message = await read($, note)
+    const pings = await read($, pingCount)
+    const pingRead = await read($, lastPingRead)
+    const spent = await read($, pingsUsd)
+    const paused = await read($, pausedReason)
     const now = Math.max(shownNow, await $.clock.now())
+    const model = await $.session.model().catch(() => '')
+    const tokens = await chatTokens($)
+    const price = priceOf(model)
 
     const left = last + TTL_MS - now
     const isCold = last > 0 && left <= 0
-    const color = last === 0 ? C.muted : isCold ? C.cold : left < LEAD_MS * 2 ? C.soon : C.warm
-    const label = last === 0 ? 'waiting for the first reply' : isCold ? `expired ${fmtAgo(-left)} ago` : `${fmtLeft(left)} left`
-    const untilHi = last + TTL_MS - LEAD_MS - now
-    const hint = !keep ? '' : last === 0 ? ' · keeps it from the first reply' : isCold ? ' · keeps it from your next message' : untilHi > 0 ? ` · Hi in ${fmtLeft(untilHi)}` : ' · sending Hi…'
+    const color = last === 0 ? C.muted : isCold || left < LEAD_MS ? C.cold : left < LEAD_MS * 2 ? C.soon : C.warm
+    const filled = last === 0 || isCold ? 0 : Math.max(1, Math.round((left / TTL_MS) * BAR_CELLS))
+    const untilPing = last + TTL_MS - LEAD_MS - now
 
-    const bar = choosing ? (
+    // Line 1: the clock, the bar, and the buttons (the only line left when folded).
+    const head = (
+      <Box key="cache-head" flexDirection="row" justifyContent="space-between" flexWrap="wrap">
+        <Text>
+          <Text color={color}>{'◷ Cache '}</Text>
+          {last === 0 ? <Text color={C.muted}>waiting for the first reply</Text> : null}
+          {isCold ? (
+            <Text color={C.cold} bold>
+              {`cold · expired ${fmtAgo(-left)} ago`}
+            </Text>
+          ) : null}
+          {last > 0 && !isCold ? <Text color={color}>{'warm '}</Text> : null}
+          {last > 0 && !isCold ? (
+            <Text color={color} bold>
+              {fmtClock(left)}
+            </Text>
+          ) : null}
+          <Text>{'  '}</Text>
+          <Text color={color}>{'━'.repeat(filled)}</Text>
+          <Text color={C.track}>{'━'.repeat(BAR_CELLS - filled)}</Text>
+        </Text>
+        <Box flexDirection="row" gap={1}>
+          <Button key="keep-cache" variant={keep ? 'primary' : 'secondary'} onPress={() => setKeep($, !keep)}>
+            {'Auto-warm: '}
+            <Text bold color={keep ? C.warm : C.muted}>
+              {keep ? 'ON' : 'OFF'}
+            </Text>
+          </Button>
+          <Button key="create-handoff" label="Create Handoff" onPress={() => update($, isChoosingHandoff, () => true)} />
+          <Button key="hide-card" label={hidden ? 'Show' : 'Hide'} onPress={() => setHidden($, !hidden)} />
+        </Box>
+      </Box>
+    )
+
+    const dollars =
+      price && tokens > 0 ? ` (~${fmtUsd((tokens * price[0]) / 1e6)} warm vs ~${fmtUsd((tokens * price[1]) / 1e6)} if it goes cold)` : ''
+    const explain =
+      last === 0
+        ? 'The clock starts with Claude\'s first reply; the cache then stays warm for an hour.'
+        : isCold
+          ? `The cache went cold: your next message writes ${tokens > 0 ? `about ${fmtK(tokens)} tokens` : 'the whole chat'} again${price && tokens > 0 ? ` (~${fmtUsd((tokens * price[1]) / 1e6)})` : ''}.`
+          : `1 hour cache, as Anthropic's last reply set it. Reply now and ${tokens > 0 ? `${fmtK(tokens)} tokens` : 'the chat'} cost 5 to 10% as much${dollars}.`
+
+    const spentText = pings > 0 && spent > 0 ? ` · pings so far ~${fmtUsd(spent)}` : ''
+    const keepLine = !keep ? (
+      <Text key="keep-line" color={C.muted}>
+        Auto-warm is off · a notification comes 5 minutes before it goes cold
+      </Text>
+    ) : paused !== '' ? (
+      <Text key="keep-line" color={C.soon}>
+        {`Pinging paused: ${paused}. It starts again after your next message.`}
+      </Text>
+    ) : last === 0 || isCold ? (
+      <Text key="keep-line" color={C.keep}>
+        {`Keeping warm · from your next reply${spentText}`}
+      </Text>
+    ) : (
+      <Text key="keep-line" color={C.keep}>
+        {pings === 0
+          ? `Keeping warm · first ping in ${fmtClock(untilPing)}`
+          : `Keeping warm · ping ${pings} · next in ${fmtClock(untilPing)} · last ping read ${fmtK(pingRead)} cached tokens${spentText}`}
+      </Text>
+    )
+
+    const card = choosing ? (
       <Box flexDirection="row" gap={1} flexWrap="wrap">
         <Text color={C.soon} bold>
           Create Handoff:
@@ -416,31 +680,25 @@ export const register: Register = on => {
         <Button key="handoff-write" label="Just write it" onPress={() => runHandoff($, 'dry')} />
         <Button key="handoff-cancel" label="Cancel" role="dismiss" onPress={() => update($, isChoosingHandoff, () => false)} />
       </Box>
+    ) : hidden ? (
+      head
     ) : (
-      <Box flexDirection="row" gap={1} flexWrap="wrap">
-        <Text>
-          <Text color={C.accent} bold>
-            ◷ Cache{' '}
-          </Text>
-          <Text color={color} bold>
-            {label}
-          </Text>
-          <Text dimColor>{hint}</Text>
+      <Box flexDirection="column">
+        {head}
+        <Text key="explain" color={C.muted} wrap="wrap">
+          {explain}
         </Text>
-        <Button key="keep-cache" variant={keep ? 'primary' : 'secondary'} onPress={() => setKeep($, !keep)}>
-          Keep cache:{' '}
-          <Text bold color={keep ? C.warm : C.muted}>
-            {keep ? 'ON' : 'OFF'}
-          </Text>
-        </Button>
-        <Button key="create-handoff" label="Create Handoff" onPress={() => update($, isChoosingHandoff, () => true)} />
+        {keepLine}
+        <Text key="cost-note" dimColor wrap="wrap">
+          Each ping reads the chat from cache for a small part of the price (5 to 10%). Letting it go cold means writing it all again.
+        </Text>
       </Box>
     )
 
     return (
       <Box flexDirection="column">
         {rest ?? null}
-        {bar}
+        {card}
         {message !== '' && <Text dimColor>{message}</Text>}
       </Box>
     )

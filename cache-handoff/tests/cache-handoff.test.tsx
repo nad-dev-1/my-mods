@@ -29,7 +29,17 @@ type World = {
   clock: ReturnType<typeof mock.clock>
   sent: string[]
   runs: { command: string; args?: string }[]
+  /** Invisible pings: each fork's prompt. */
+  forks: string[]
+  /** What the next forks answer, first first; the last one repeats. */
+  forkAnswers: any[]
+  notes: string[]
+  /** The chat's size as the session reports it. */
+  ctxTokens: number
+  box: string
 }
+
+const PING_READ = { input_tokens: 12, output_tokens: 2, cache_read_input_tokens: 214_000, cache_creation_input_tokens: 0 }
 
 function world(
   on: any,
@@ -40,6 +50,26 @@ function world(
   mock.store(on, stored)
   const sent: string[] = []
   const runs: { command: string; args?: string }[] = []
+  const w0 = { forks: [] as string[], forkAnswers: [{ isAnswered: true, text: 'OK', usage: PING_READ }] as any[], notes: [] as string[], ctxTokens: 214_000, box: '' }
+  on('model.fork', (_: unknown, e: any) => {
+    w0.forks.push(e.prompt)
+    const answer = w0.forkAnswers.length > 1 ? w0.forkAnswers.shift() : w0.forkAnswers[0]
+
+    return { value: answer }
+  })
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1_000_000, tokens: w0.ctxTokens, percent: 21 }, rateLimits: [] } }))
+  on('ui.notify', (_: unknown, e: any) => {
+    w0.notes.push(e.text)
+
+    return { value: { isSent: true, channel: 'terminal' } }
+  })
+  on('prompt.read', () => ({ value: { text: w0.box, cursor: w0.box.length } }))
+  on('prompt.fill', (_: unknown, e: any) => {
+    w0.box = e.text
+
+    return { isFilled: true }
+  })
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('prompt.submit', (_: unknown, e: any) => {
     sent.push(e.text)
@@ -54,7 +84,7 @@ function world(
   })
   on('turn.complete', (_: unknown, e: any) => ({ text: e.answer, usage: e.usage }))
 
-  return { clock, sent, runs }
+  return Object.assign(w0, { clock, sent, runs }) as World
 }
 
 async function start($: any) {
@@ -73,106 +103,219 @@ async function reply($: any) {
   })
 }
 
-test('before any reply the bar says it is waiting, with both buttons', async ($, on) => {
+/** Every text the card shows, button captions included. */
+const texts = async (ui: any) =>
+  [...(await ui.findAll({ type: 'Text' })), ...(await ui.findAll({ type: 'Button' }))]
+    .map((t: any) => [t.text, t.label, t.props?.label].filter(Boolean).join(' '))
+    .join('\n')
+
+test('before any reply the card says it is waiting, with the switch, Create Handoff and Hide', async ($, on) => {
   world(on)
   await start($)
-
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
-  expect(await ui.find({ type: 'Text', text: /waiting for the first reply/ })).toBeTruthy()
-  expect(await ui.find({ type: 'Button', key: 'keep-cache' })).toBeTruthy()
-  expect(await ui.find({ type: 'Button', key: 'create-handoff' })).toBeTruthy()
-  expect(await ui.find({ type: 'Text', text: /^OFF$/ })).toBeTruthy()
+  expect(await texts(ui)).toMatch(/Cache waiting for the first reply/)
+  for (const key of ['keep-cache', 'create-handoff', 'hide-card']) expect(await ui.find({ type: 'Button', key })).toBeTruthy()
   await ui.unmount()
 })
 
-test('after a reply the bar counts down the hour, then says it expired', async ($, on) => {
+test('after a reply the card counts the hour down in mm:ss with a bar, then says it went cold', async ($, on) => {
   const w = world(on)
   await start($)
   await reply($)
 
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
-  expect(await ui.find({ type: 'Text', text: /^1h00m left$/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^60:00$/ })).toBeTruthy()
+  expect(await texts(ui)).toMatch(/Cache warm/)
+  expect(await texts(ui)).toMatch(/1 hour cache, as Anthropic's last reply set it\. Reply now and 214k tokens cost 5 to 10% as much/)
 
-  await w.clock.advance(18 * MIN)
-  expect(await ui.find({ type: 'Text', text: /^42m left$/ })).toBeTruthy()
+  await w.clock.advance(18 * MIN + 11_000)
+  expect(await ui.find({ type: 'Text', text: /^41:49$/ })).toBeTruthy()
 
   await w.clock.advance(38 * MIN)
-  expect(await ui.find({ type: 'Text', text: /^4:00 left$/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^3:49$/ })).toBeTruthy()
 
   await w.clock.advance(7 * MIN)
-  expect(await ui.find({ type: 'Text', text: /^expired 3m ago$/ })).toBeTruthy()
+  expect(await texts(ui)).toMatch(/Cache cold · expired 3m ago/)
   await ui.unmount()
 })
 
-test('with Keep cache on, "Hi" goes out 5 minutes before the cache expires', async ($, on) => {
+test('Auto-warm sends an invisible ping 5 minutes before expiry, never a message, and the hour starts again', async ($, on) => {
   const w = world(on)
   await start($)
   await reply($)
-
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
   await ui.press({ key: 'keep-cache' })
-  expect(await ui.find({ type: 'Text', text: /^ON$/ })).toBeTruthy()
+  expect(await texts(ui)).toMatch(/Auto-warm: ON/)
+  expect(await texts(ui)).toMatch(/Keeping warm · first ping in 55:00/)
 
   await w.clock.advance(54 * MIN)
-  expect(w.sent).toEqual([])
-
+  expect(w.forks.length).toBe(0)
   await w.clock.advance(1 * MIN)
-  expect(w.sent).toEqual(['Hi'])
+  expect(w.forks.length).toBe(1)
+  expect(w.sent).toEqual([])
+  expect(await ui.find({ type: 'Text', text: /^60:00$/ })).toBeTruthy()
+  expect(await texts(ui)).toMatch(/Keeping warm · ping 1 · next in 55:00 · last ping read 214k cached tokens/)
   await ui.unmount()
 })
 
-test('with Keep cache off, nothing is sent', async ($, on) => {
-  const w = world(on)
-  await start($)
-  await reply($)
-
-  await w.clock.advance(70 * MIN)
-  expect(w.sent).toEqual([])
-})
-
-test('turning Keep cache off on the fly cancels the pending "Hi"', async ($, on) => {
-  const w = world(on)
-  await start($)
-  await reply($)
-
-  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
-  await ui.press({ key: 'keep-cache' })
-  await w.clock.advance(30 * MIN)
-  await ui.press({ key: 'keep-cache' })
-  expect(await ui.find({ type: 'Text', text: /^OFF$/ })).toBeTruthy()
-
-  await w.clock.advance(40 * MIN)
-  expect(w.sent).toEqual([])
-  await ui.unmount()
-})
-
-test('a new reply restarts the hour, so the "Hi" moves later', async ($, on) => {
-  const w = world(on)
-  await start($)
-  await reply($)
-
-  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
-  await ui.press({ key: 'keep-cache' })
-  await w.clock.advance(30 * MIN)
-  await reply($)
-
-  await w.clock.advance(30 * MIN)
-  expect(w.sent).toEqual([])
-  await w.clock.advance(25 * MIN)
-  expect(w.sent).toEqual(['Hi'])
-  await ui.unmount()
-})
-
-test('a session starts with the Keep cache switch as it was left', async ($, on) => {
+test('Auto-warm stays on with no cap: a long break keeps pinging every hour', async ($, on) => {
   const w = world(on, [], { 'keep-cache': true })
   await start($)
   await reply($)
-
-  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
-  expect(await ui.find({ type: 'Text', text: /^ON$/ })).toBeTruthy()
   await w.clock.advance(55 * MIN)
-  expect(w.sent).toEqual(['Hi'])
+  await w.clock.advance(55 * MIN)
+  await w.clock.advance(55 * MIN)
+  await w.clock.advance(55 * MIN)
+  expect(w.forks.length).toBe(4)
+  // A reply in between keeps it on; the next ping counts from that reply.
+  await reply($)
+  await w.clock.advance(55 * MIN)
+  expect(w.forks.length).toBe(5)
+})
+
+test('turning Auto-warm off on the fly cancels the pending ping', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await reply($)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
+  await ui.press({ key: 'keep-cache' })
+  await w.clock.advance(30 * MIN)
+  await ui.press({ key: 'keep-cache' })
+  expect(await texts(ui)).toMatch(/Auto-warm: OFF/)
+  await w.clock.advance(40 * MIN)
+  expect(w.forks.length).toBe(0)
   await ui.unmount()
+})
+
+test('with Auto-warm off, nothing is sent, and a notification comes once 5 minutes before it goes cold', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await reply($)
+  await w.clock.advance(54 * MIN)
+  expect(w.notes).toEqual([])
+  await w.clock.advance(1 * MIN)
+  expect(w.notes.length).toBe(1)
+  expect(w.notes[0]).toMatch(/goes cold in 5 minutes/)
+  await w.clock.advance(20 * MIN)
+  expect(w.notes.length).toBe(1)
+  expect(w.forks.length).toBe(0)
+  expect(w.sent).toEqual([])
+})
+
+test('a ping that read no cache stops the pinging and says why; the next reply starts it again', async ($, on) => {
+  const w = world(on)
+  w.forkAnswers = [{ isAnswered: true, text: 'OK', usage: { ...PING_READ, cache_read_input_tokens: 0, cache_creation_input_tokens: 214_000 } }, { isAnswered: true, text: 'OK', usage: PING_READ }]
+  await start($)
+  await reply($)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
+  await ui.press({ key: 'keep-cache' })
+  await w.clock.advance(55 * MIN)
+  expect(w.forks.length).toBe(1)
+  expect(await texts(ui)).toMatch(/Pinging paused: the last ping found no cache/)
+  await w.clock.advance(60 * MIN)
+  expect(w.forks.length).toBe(1)
+
+  await reply($)
+  expect(await texts(ui)).not.toMatch(/Pinging paused/)
+  await w.clock.advance(55 * MIN)
+  expect(w.forks.length).toBe(2)
+  await ui.unmount()
+})
+
+test('a ping refused by a busy API is tried again a minute later', async ($, on) => {
+  const w = world(on)
+  w.forkAnswers = [{ isAnswered: false, reason: 'api-error', status: 529, error: 'overloaded', usage: PING_READ }, { isAnswered: true, text: 'OK', usage: PING_READ }]
+  await start($)
+  await reply($)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
+  await ui.press({ key: 'keep-cache' })
+  await w.clock.advance(55 * MIN)
+  expect(w.forks.length).toBe(1)
+  await w.clock.advance(1 * MIN)
+  expect(w.forks.length).toBe(2)
+  expect(await texts(ui)).toMatch(/ping 1 · next in/)
+  await ui.unmount()
+})
+
+test('the card shows dollar estimates and what the pings have cost', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await reply($)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
+  // Opus 5.5: 214k tokens read warm at $0.20/MTok, written cold at $8/MTok.
+  expect(await texts(ui)).toMatch(/~\$0\.04 warm vs ~\$1\.71 if it goes cold/)
+  await ui.press({ key: 'keep-cache' })
+  await w.clock.advance(55 * MIN)
+  expect(await texts(ui)).toMatch(/pings so far ~\$0\.04/)
+  await ui.unmount()
+})
+
+test('Hide folds the card to one line that keeps the timer and the switch; Show brings it back', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await reply($)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
+  await ui.press({ key: 'hide-card' })
+  const folded = await texts(ui)
+  expect(folded).not.toMatch(/1 hour cache/)
+  expect(await ui.find({ type: 'Text', text: /^60:00$/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Button', key: 'keep-cache' })).toBeTruthy()
+  expect(await ui.find({ type: 'Button', key: 'hide-card' })).toBeTruthy()
+  expect(folded).toMatch(/Show/)
+  await ui.unmount()
+
+  // Remembered: a new session starts folded.
+  await start($)
+  const again = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
+  expect(await texts(again)).not.toMatch(/1 hour cache/)
+  await again.press({ key: 'hide-card' })
+  expect(await texts(again)).toMatch(/1 hour cache/)
+  await again.unmount()
+  void w
+})
+
+test('a session starts with the Auto-warm switch as it was left', async ($, on) => {
+  const w = world(on, [], { 'keep-cache': true })
+  await start($)
+  await reply($)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
+  expect(await texts(ui)).toMatch(/Auto-warm: ON/)
+  await w.clock.advance(55 * MIN)
+  expect(w.forks.length).toBe(1)
+  await ui.unmount()
+})
+
+const typed = (text: string) => ({ text, wait: false, origin: { kind: 'composer' } }) as never
+
+test('the cold-send guard holds back the first message on a cold, large chat once, with the price', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await reply($)
+  await w.clock.advance(75 * MIN)
+
+  const first = await $.prompt.submit(typed('carry on'))
+  expect(first.drop).toMatch(/cold 15m ago.*214k tokens.*~\$1\.71/)
+  expect(w.sent).toEqual([])
+  // The text is put back in the box, so sending again is one keypress.
+  await w.clock.advance(1000)
+  expect(w.box).toBe('carry on')
+
+  const second = await $.prompt.submit(typed('carry on'))
+  expect(second.drop).toBeUndefined()
+  expect(w.sent).toEqual(['carry on'])
+})
+
+test('the guard leaves warm chats, small chats, slash commands and prompts nobody typed alone', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await reply($)
+  expect((await $.prompt.submit(typed('warm'))).drop).toBeUndefined()
+
+  await w.clock.advance(75 * MIN)
+  expect((await $.prompt.submit({ text: '/clear', wait: false, origin: { kind: 'composer' }, command: { name: 'clear', args: '' } } as never)).drop).toBeUndefined()
+  expect((await $.prompt.submit({ text: 'task done', wait: false, origin: { kind: 'task-notification' } } as never)).drop).toBeUndefined()
+  w.ctxTokens = 20_000
+  expect((await $.prompt.submit(typed('small'))).drop).toBeUndefined()
 })
 
 test('Create Handoff asks first, and "Just write it" runs ctx-handoff dry', async ($, on) => {
