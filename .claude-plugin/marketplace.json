@@ -56,6 +56,11 @@
       "name": "employee-control-panel",
       "source": "./employee-control-panel",
       "description": "A Control Tools button in the status bar that opens a panel to switch the model and effort level for Claude and its subagents, with a live status line"
+    },
+    {
+      "name": "chat-inventory",
+      "source": "./chat-inventory",
+      "description": "A side pane, In this chat, with live cards for the to-do list, the connectors and command-line tools called, the context files read, the skills, the subagents and the web pages this chat used; opened from the status bar or /inventory"
     }
   ]
 }

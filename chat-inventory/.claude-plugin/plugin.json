@@ -1,0 +1,9 @@
+{
+  "name": "chat-inventory",
+  "version": "0.1.0",
+  "description": "A side pane, In this chat, with live cards for the to-do list, the connectors and command-line tools called, the context files read, the skills, the subagents and the web pages this chat used; opened from the status bar or /inventory",
+  "author": {
+    "name": "nad-dev-1"
+  },
+  "types": "./types/index.d.ts"
+}

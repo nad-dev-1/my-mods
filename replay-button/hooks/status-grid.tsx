@@ -24,6 +24,7 @@ export const GRID_ORDER = [
   'open-replay',
   // Views
   'open-agent-dock',
+  'open-inventory',
   'toggle-filetree',
   'open-git-review',
   // Reports

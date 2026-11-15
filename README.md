@@ -9,6 +9,7 @@ Claude Code mods: plugins with a hooks module that change what Claude Code does 
 | [`work-report/`](work-report/) | A pane that shows the tasks Claude finished for you, the hours that likely saved, and what that time is worth. |
 | [`mod-manager/`](mod-manager/) | List every installed plugin/mod with its status and turn each one on or off, from /mods or a panel |
 | [`cache-handoff/`](cache-handoff/) | A Cache Clock card above the prompt (the hour the prompt cache stays warm, an always-visible Auto-warm switch with invisible pings, dollar estimates, a cold-send guard) and a Handoff: a Refresh banner past 250k or on a cold cache, a five-step progress card, and a ready card that starts a new chat from the saved handoff |
+| [`chat-inventory/`](chat-inventory/) | A side pane, In this chat, with live cards for the to-do list, the connectors and command-line tools called, the context files read, the skills, the subagents and the web pages this chat used; opened from the status bar or /inventory |
 | [`replay-button/`](replay-button/) | A Replay button in the status bar that opens Replay Theater's step-through of the last turn's file edits |
 | [`filetree-button/`](filetree-button/) | A Files button in the status bar that shows or hides the filetree mod's file tree |
 | [`inject-prompt/`](inject-prompt/) | An Inject button in the status bar that opens your saved prompts, grouped by category and filterable by tag or search, and inserts the ones you pick at the cursor |
