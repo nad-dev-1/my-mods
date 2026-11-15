@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { AskPath, GrView, MergeRequest, MrRole, PipeFilter, ReviewStatus, Scope, SortBy } from '../types'
+import { statusGrid } from './status-grid'
 
 // Git Review: a status-bar button opens a dialog of open GitLab merge requests
 // (assigned to me, asking me to review, and the configured group's), grouped by
@@ -878,11 +879,12 @@ export const register: Register = (on, options) => {
     const fill = open ? C.greenBright : C.green
     const modes = e.props.modes
 
-    return (
-      <Box flexDirection="row">
-        {below ?? (modes.length > 0 ? <Text dimColor>{modes.join(' & ')}</Text> : null)}
-        <Text>{'  '}</Text>
-        <Button
+    // Every mod's status-bar button goes in one shared grid (status-grid.tsx).
+    return statusGrid(
+      { Box, Text },
+      below,
+      modes,
+      <Button
           key="open-git-review"
           plain
           onPress={async () => {
@@ -897,9 +899,8 @@ export const register: Register = (on, options) => {
             {mine > 0 ? `⎇ Git Review ${mine}` : '⎇ Git Review'}
           </Text>
           <Text color={fill}>▌</Text>
-        </Button>
-      </Box>
-    )
+        </Button>,
+    ) as never
   })
 
   // The dialog.

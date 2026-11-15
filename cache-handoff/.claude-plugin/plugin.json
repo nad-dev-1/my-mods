@@ -1,6 +1,6 @@
 {
   "name": "cache-handoff",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A bar above the prompt showing time left on the prompt cache, a Keep cache switch that sends a short 'Hi' 5 minutes before it expires, and a Create Handoff button for ctx-handoff",
   "author": { "name": "nad-dev-1" },
   "types": "./types/index.d.ts"

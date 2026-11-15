@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { HandoffMode } from '../types'
+import { statusGrid } from './status-grid'
 
 /** This session's prompt cache lives an hour after the last request reads it. */
 const TTL_MS = 60 * 60 * 1000
@@ -345,11 +346,12 @@ export const register: Register = on => {
     const fill = queued ? C.coralBright : C.coral
     const modes = e.props.modes
 
-    return (
-      <Box flexDirection="row">
-        {below ?? (modes.length > 0 ? <Text dimColor>{modes.join(' & ')}</Text> : null)}
-        <Text>{'  '}</Text>
-        <Button
+    // Every mod's status-bar button goes in one shared grid (status-grid.tsx).
+    return statusGrid(
+      { Box, Text },
+      below,
+      modes,
+      <Button
           key="open-handoff"
           plain
           onPress={async () => {
@@ -362,9 +364,8 @@ export const register: Register = on => {
             {queued ? '⇄ Handoff …' : '⇄ Handoff'}
           </Text>
           <Text color={fill}>▌</Text>
-        </Button>
-      </Box>
-    )
+        </Button>,
+    ) as never
   })
 
   // The dialog it opens.

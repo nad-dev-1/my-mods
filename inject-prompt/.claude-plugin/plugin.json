@@ -1,6 +1,6 @@
 {
   "name": "inject-prompt",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "An Inject button in the status bar that opens a list of saved prompts, grouped by category and filterable by tag or search, and inserts the ones you pick where the cursor is in the prompt box",
   "author": { "name": "nad-dev-1" },
   "license": "MIT",

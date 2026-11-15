@@ -3,6 +3,8 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Alias, GitInfo, Level, MainPicks, SubPicks, Tokens } from '../types'
 
+import { statusGrid } from './status-grid'
+
 // Employee Control Panel: a "Control Tools" button in the status bar opens a
 // panel to switch the model and effort level of the main session (it runs
 // /model and /effort for you) and of the subagents Claude starts (it rewrites
@@ -522,7 +524,6 @@ export const register: Register = on => {
           else await openPanel($)
         }}
       >
-        <Text>{'   '}</Text>
         <Text backgroundColor={open ? C.orange : C.chip} color={open ? C.white : C.orange} bold>
           {` ◆ Control Tools ${open ? '∨' : '∧'} `}
         </Text>
@@ -551,7 +552,6 @@ export const register: Register = on => {
         </Text>,
         subText ? seg('seg-sub', 'sub', subText, C.text, false) : null,
       ],
-      button,
     )
     const line2 = line('line-2', [
       fiveHour ? seg('seg-5h', '5h', `${Math.round(fiveHour.percentUsed)}%`, pctColor(fiveHour.percentUsed)) : null,
@@ -593,14 +593,17 @@ export const register: Register = on => {
       seg('seg-style', 'style', typeof style === 'string' && style ? style : 'default', C.text, false),
     ])
 
-    return (
-      <Box flexDirection="column">
-        {below ?? (modes.length > 0 ? <Text dimColor>{modes.join(' & ')}</Text> : null)}
+    // The status lines on the left; every mod's button, this one's first, in
+    // the grid to their right.
+    const statusLeft = (
+      <Box key="status-left" flexDirection="column">
         {line1}
         {line2}
         {line3}
       </Box>
     )
+
+    return statusGrid({ Box, Text }, below, modes, button, statusLeft) as ReturnType<typeof seg>
   })
 
   // The panel.

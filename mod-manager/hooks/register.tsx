@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { ModFilter, ModInfo } from '../types'
+import { statusGrid } from './status-grid'
 
 const PANE = 'mod-manager'
 const TITLE = 'Mods'
@@ -399,11 +400,12 @@ export const register: Register = on => {
     const fill = isOpen ? C.violetBright : C.violet
     const modes = e.props.modes
 
-    return (
-      <Box flexDirection="row">
-        {below ?? (modes.length > 0 ? <Text dimColor>{modes.join(' & ')}</Text> : null)}
-        <Text>{'  '}</Text>
-        <Button
+    // Every mod's status-bar button goes in one shared grid (status-grid.tsx).
+    return statusGrid(
+      { Box, Text },
+      below,
+      modes,
+      <Button
           key="open-mod-manager"
           plain
           onPress={async () => {
@@ -427,9 +429,8 @@ export const register: Register = on => {
             {`≡ Mods${count}${pending ? ' •' : ''}`}
           </Text>
           <Text color={fill}>▌</Text>
-        </Button>
-      </Box>
-    )
+        </Button>,
+    ) as never
   }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'mods' }, async ($, e) => {

@@ -1,0 +1,117 @@
+// The status-bar button grid, shared by every mod that puts a button on the
+// status bar. Keep every copy identical: whichever mod's hook runs last lays
+// out the whole bar, so each one must lay it out the same way.
+//
+// What the hooks beneath drew arrives as plain data. Every Button in it is
+// gathered (each still answers its own mod's press), sorted into a fixed
+// order and laid out in a grid of three rows, filled column by column, to the
+// right of the status lines (the Box keyed `status-left`, kept as drawn).
+// Anything else the hooks beneath drew is drawn again from `modes`.
+
+/** Rows of the grid; the columns follow from the number of buttons. */
+export const GRID_ROWS = 3
+
+/** The grid's order by Button key: a column per purpose. Unknown keys go last. */
+export const GRID_ORDER = [
+  // Session controls
+  'open-controls',
+  'open-mod-manager',
+  'open-handoff',
+  // Prompt tools
+  'open-inject',
+  'open-prompt-upgrade',
+  'open-replay',
+  // Views
+  'open-agent-dock',
+  'toggle-filetree',
+  'open-git-review',
+  // Reports
+  'open-work-report',
+]
+
+type TreeNode = { type?: unknown; key?: unknown; props?: Record<string, unknown>; children?: unknown }
+
+function keyOf(node: TreeNode): string {
+  const k = node.props?.key ?? node.key
+
+  return typeof k === 'string' ? k : ''
+}
+
+/** The Buttons of a tree in drawing order, and its `status-left` part, if any. */
+function gather(node: unknown, found: { buttons: TreeNode[]; left: TreeNode | null }): void {
+  if (Array.isArray(node)) {
+    for (const n of node) gather(n, found)
+
+    return
+  }
+  if (!node || typeof node !== 'object') return
+  const o = node as TreeNode
+  if (keyOf(o) === 'status-left') {
+    found.left ??= o
+
+    return
+  }
+  if (o.type === 'Button') {
+    found.buttons.push(o)
+
+    return
+  }
+  gather(o.children ?? o.props?.children, found)
+}
+
+function rank(key: string): number {
+  const at = GRID_ORDER.indexOf(key)
+
+  return at < 0 ? GRID_ORDER.length : at
+}
+
+/**
+ * The whole status bar: the modes, the status lines, then every button in a
+ * three-row grid. `mine` is the calling mod's own Button, `left` its status
+ * lines when it draws them.
+ */
+export function statusGrid(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  els: { Box: any; Text: any },
+  below: unknown,
+  modes: readonly string[],
+  mine: unknown,
+  left?: unknown,
+): unknown {
+  const { Box, Text } = els
+  const found: { buttons: TreeNode[]; left: TreeNode | null } = { buttons: [], left: null }
+  gather(below, found)
+  const all = [...found.buttons, mine as TreeNode]
+  const seen = new Set<string>()
+  const buttons = all
+    .filter(b => {
+      const id = `${keyOf(b)}|${JSON.stringify((b as { press?: unknown }).press ?? '')}`
+      if (seen.has(id)) return false
+      seen.add(id)
+
+      return true
+    })
+    .map((b, i) => ({ b, i, r: rank(keyOf(b)), k: keyOf(b) }))
+    .sort((x, y) => x.r - y.r || x.k.localeCompare(y.k) || x.i - y.i)
+    .map(x => x.b)
+  const columns: TreeNode[][] = []
+  buttons.forEach((b, i) => {
+    const c = Math.floor(i / GRID_ROWS)
+    ;(columns[c] ??= []).push(b)
+  })
+  const statusLines = left ?? found.left
+
+  return (
+    <Box key="status-root" flexDirection="row" alignItems="flex-start">
+      {modes.length > 0 ? <Text dimColor>{`${modes.join(' & ')}   `}</Text> : null}
+      {statusLines ?? null}
+      <Box key="status-grid" flexDirection="row" marginLeft={3}>
+        {columns.map((col, i) => (
+          <Box key={`status-grid-col-${i}`} flexDirection="column" marginRight={1}>
+            {col}
+          </Box>
+        ))}
+      </Box>
+    </Box>
+  )
+}

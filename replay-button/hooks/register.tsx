@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { ReplayTarget } from '../types'
+import { statusGrid } from './status-grid'
 
 // A status-bar button that opens Replay Theater. The pane, the diffs and the
 // stepping all stay Replay Theater's: this mod only counts the edits, so the
@@ -102,11 +103,12 @@ export const register: Register = on => {
     const ink = hasEdits ? C.ink : C.idleText
     const modes = e.props.modes
 
-    return (
-      <Box flexDirection="row">
-        {below ?? (modes.length > 0 ? <Text dimColor>{modes.join(' & ')}</Text> : null)}
-        <Text>{'  '}</Text>
-        <Button
+    // Every mod's status-bar button goes in one shared grid (status-grid.tsx).
+    return statusGrid(
+      { Box, Text },
+      below,
+      modes,
+      <Button
           key="open-replay"
           plain
           onPress={() => {
@@ -121,8 +123,7 @@ export const register: Register = on => {
             {hasEdits ? `▶ Replay ${count}` : '▶ Replay'}
           </Text>
           <Text color={fill}>▌</Text>
-        </Button>
-      </Box>
-    )
+        </Button>,
+    ) as never
   })
 }

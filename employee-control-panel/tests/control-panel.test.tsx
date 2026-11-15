@@ -379,3 +379,42 @@ test('the bar carries everything ccstatusline showed', async ($, on) => {
   expect(await barHas($, /total\s+125k/)).toBe(true)
   expect(await barHas($, /style\s+default/)).toBe(true)
 })
+
+test('every mod\'s button sits in a 3-row grid, in a fixed order, and still answers its own mod', async ($, on) => {
+  const w = world(on)
+  const pressed: string[] = []
+  // Other mods' buttons, drawn beneath in a jumbled order, one nested.
+  on('ui.render', { component: 'SessionMode' }, ($t: any, e: any) => {
+    const { Box, Button, Text } = $t.ui.resolve(e)
+
+    return (
+      <Box flexDirection="row">
+        <Text dimColor>focus</Text>
+        <Button key="zz-unknown" label="Zed" onPress={() => { pressed.push('zz') }} />
+        <Box flexDirection="row">
+          <Button key="open-work-report" label="Work report" onPress={() => { pressed.push('report') }} />
+          <Button key="open-inject" label="Inject" onPress={() => { pressed.push('inject') }} />
+        </Box>
+        <Button key="open-mod-manager" label="Mods" onPress={() => { pressed.push('mods') }} />
+      </Box>
+    )
+  })
+  await start($)
+  const bar = await $.ui.mount({ ...STATUS_BAR, props: { modes: ['focus'] }, surface: 'terminal' } as any)
+
+  const order = (await bar.findAll({ type: 'Button' })).map((b: any) => b.key)
+  expect(order).toEqual(['open-controls', 'open-mod-manager', 'open-inject', 'open-work-report', 'zz-unknown'])
+  // Three rows: the fourth button starts a second column.
+  expect(await bar.find({ type: 'Box', key: 'status-grid-col-0' })).toBeTruthy()
+  expect(await bar.find({ type: 'Box', key: 'status-grid-col-1' })).toBeTruthy()
+  expect(await bar.find({ type: 'Box', key: 'status-grid-col-2' })).toBeFalsy()
+  // The status lines stay on the left, and the modes are drawn once.
+  expect(await bar.find({ type: 'Box', key: 'status-left' })).toBeTruthy()
+  const texts = (await bar.findAll({ type: 'Text' })).map((t: any) => t.text ?? '').join('|')
+  expect(texts.split('focus').length - 1).toBe(1)
+  // A regrouped button still answers its own mod.
+  await bar.press({ key: 'open-inject', plugin: 'test' } as never)
+  expect(pressed).toEqual(['inject'])
+  await bar.unmount()
+  void w
+})

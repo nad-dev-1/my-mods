@@ -32,6 +32,7 @@ import {
   toolUseOf,
 } from './lib'
 import type { ToolUse } from './lib'
+import { statusGrid } from './status-grid'
 
 type E$ = EngineInterface
 
@@ -690,11 +691,12 @@ export const register: Register = on => {
     // Draw beside what is already there (the engine's labels, other mods' buttons), never over it.
     const below = await next(e)
     const modes = e.props.modes
-    return (
-      <Box flexDirection="row">
-        {below ?? (modes.length > 0 ? <Text dimColor>{modes.join(' & ')}</Text> : null)}
-        <Text>{'  '}</Text>
-        <Button
+    // Every mod's status-bar button goes in one shared grid (status-grid.tsx).
+    return statusGrid(
+      { Box, Text },
+      below,
+      modes,
+      <Button
           key="open-work-report"
           plain
           onPress={async () => {
@@ -706,9 +708,8 @@ export const register: Register = on => {
           }}
         >
           <Text color={C.gold}>Work report</Text>
-        </Button>
-      </Box>
-    )
+        </Button>,
+    ) as never
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {

@@ -1,4 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
+import { statusGrid } from './status-grid'
 
 // A status-bar button that shows or hides the filetree mod's sidebar, as
 // `/filetree` does. The tree itself stays filetree's: this only runs the command.
@@ -39,11 +40,12 @@ export const register: Register = on => {
     const below = await next(e)
     const modes = e.props.modes
 
-    return (
-      <Box flexDirection="row">
-        {below ?? (modes.length > 0 ? <Text dimColor>{modes.join(' & ')}</Text> : null)}
-        <Text>{'  '}</Text>
-        <Button
+    // Every mod's status-bar button goes in one shared grid (status-grid.tsx).
+    return statusGrid(
+      { Box, Text },
+      below,
+      modes,
+      <Button
           key="toggle-filetree"
           plain
           onPress={() => {
@@ -58,8 +60,7 @@ export const register: Register = on => {
             {'▤ Files'}
           </Text>
           <Text color={C.teal}>▌</Text>
-        </Button>
-      </Box>
-    )
+        </Button>,
+    ) as never
   })
 }

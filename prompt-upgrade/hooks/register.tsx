@@ -1,6 +1,7 @@
 import type { EngineInterface, ModelCompleteResult, PaneOpenArgs, PromptSubmitInput, Register } from 'claude-code'
 
 import type { Answer, Flow, FlowSource, HistoryEntry, Notice, Question } from '../types'
+import { statusGrid } from './status-grid'
 
 type E$ = EngineInterface
 
@@ -1171,11 +1172,12 @@ export const register: Register = on => {
     const { flow } = await readFlow($)
     const fill = flow ? C.amber : C.gold
     const modes = e.props.modes
-    return (
-      <Box flexDirection="row">
-        {below ?? (modes.length > 0 ? <Text dimColor>{modes.join(' & ')}</Text> : null)}
-        <Text>{'  '}</Text>
-        <Button
+    // Every mod's status-bar button goes in one shared grid (status-grid.tsx).
+    return statusGrid(
+      { Box, Text },
+      below,
+      modes,
+      <Button
           key="open-prompt-upgrade"
           plain
           onPress={() => {
@@ -1188,9 +1190,8 @@ export const register: Register = on => {
             {flow ? '✦ Upgrade …' : '✦ Upgrade'}
           </Text>
           <Text color={fill}>▌</Text>
-        </Button>
-      </Box>
-    )
+        </Button>,
+    ) as never
   }).catch(($, e, next) => next(e))
 
   // The person closed the pane (its mark, Esc): same as Cancel, so nothing is lost.

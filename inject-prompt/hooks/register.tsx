@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { AddForm, FillStep, InjectView, SavedPrompt, Stash } from '../types'
+import { statusGrid } from './status-grid'
 
 // Inject Prompt: a status-bar button opens a dialog of saved prompts, grouped
 // by category, filtered by category, tag or search. Tick one or more, press
@@ -745,11 +746,12 @@ export const register: Register = on => {
     const fillColor = open ? C.blueBright : C.blue
     const modes = e.props.modes
 
-    return (
-      <Box flexDirection="row">
-        {below ?? (modes.length > 0 ? <Text dimColor>{modes.join(' & ')}</Text> : null)}
-        <Text>{'  '}</Text>
-        <Button
+    // Every mod's status-bar button goes in one shared grid (status-grid.tsx).
+    return statusGrid(
+      { Box, Text },
+      below,
+      modes,
+      <Button
           key="open-inject"
           plain
           onPress={async () => {
@@ -763,9 +765,8 @@ export const register: Register = on => {
             {'» Inject'}
           </Text>
           <Text color={fillColor}>▌</Text>
-        </Button>
-      </Box>
-    )
+        </Button>,
+    ) as never
   })
 
   // The dialog.

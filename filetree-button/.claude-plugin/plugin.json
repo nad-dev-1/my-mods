@@ -1,5 +1,5 @@
 {
   "name": "filetree-button",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A Files button in the status bar that shows or hides the filetree mod's file tree"
 }

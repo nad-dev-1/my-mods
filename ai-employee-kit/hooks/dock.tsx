@@ -39,6 +39,7 @@ import {
   taskName,
   tilesPerRow,
 } from './dock-logic'
+import { statusGrid } from './status-grid'
 
 type E$ = EngineInterface
 
@@ -992,11 +993,12 @@ export function registerDock(on: On): void {
     const { Box, Text, Button } = $.ui.resolve(e) as unknown as Els
     const below = await next(e)
     const modes = e.props.modes
-    return (
-      <Box flexDirection="row">
-        {below ?? (modes.length > 0 ? <Text dimColor>{modes.join(' & ')}</Text> : null)}
-        <Text>{'  '}</Text>
-        <Button
+    // Every mod's status-bar button goes in one shared grid (status-grid.tsx).
+    return statusGrid(
+      { Box, Text },
+      below,
+      modes,
+      <Button
           key="open-agent-dock"
           plain
           onPress={async () => {
@@ -1008,9 +1010,8 @@ export function registerDock(on: On): void {
           }}
         >
           <Text color={C.coral}>◆ Dock</Text>
-        </Button>
-      </Box>
-    )
+        </Button>,
+    ) as never
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
