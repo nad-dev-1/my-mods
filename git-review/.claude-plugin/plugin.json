@@ -1,0 +1,30 @@
+{
+  "name": "git-review",
+  "version": "0.2.0",
+  "description": "Git Review: a status-bar button opens your GitLab merge requests (yours and your group's), grouped by project; pick one and a new terminal runs a full review: conflicts, worktree, pipelines and scans, Sonar, the project's own code review, and a files-and-secrets check of every commit.",
+  "author": {
+    "name": "nad-dev-1"
+  },
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "group": {
+      "type": "string",
+      "title": "GitLab group",
+      "description": "The group whose open merge requests are listed beside yours",
+      "default": "example-group/example-subgroup"
+    },
+    "codeRoots": {
+      "type": "string",
+      "title": "Code folders",
+      "description": "Folders searched (5 levels deep) for a local clone of an MR's project, separated by spaces or commas",
+      "default": "~/Documents/Projects ~/Desktop ~/code ~/dev"
+    },
+    "allowedPaths": {
+      "type": "string",
+      "title": "Allowed paths",
+      "description": "File patterns the files-and-secrets check allows in every project (e.g. google-services.json), separated by spaces or commas. Matches are still listed in the report as allowed.",
+      "default": ""
+    }
+  }
+}

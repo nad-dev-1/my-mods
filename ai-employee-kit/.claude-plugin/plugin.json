@@ -1,0 +1,9 @@
+{
+  "name": "ai-employee-kit",
+  "version": "0.1.0",
+  "description": "Clean View hides the technical details behind a simple checklist above the prompt; Agent Dock splits each request across a team of helper agents and shows them working live.",
+  "author": { "name": "nad-dev-1" },
+  "license": "MIT",
+  "icon": "./.claude-plugin/icon.png",
+  "types": "./types/index.d.ts"
+}

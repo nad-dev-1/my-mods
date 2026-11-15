@@ -1,0 +1,56 @@
+{
+  "name": "my-mods",
+  "owner": {
+    "name": "nad-dev-1"
+  },
+  "metadata": {
+    "description": "Personal Claude Code mods"
+  },
+  "plugins": [
+    {
+      "name": "ai-employee-kit",
+      "source": "./ai-employee-kit",
+      "description": "Clean View hides the technical details behind a simple checklist above the prompt; Agent Dock splits each request across a team of helper agents and shows them working live."
+    },
+    {
+      "name": "prompt-upgrade",
+      "source": "./prompt-upgrade",
+      "description": "Turns a rough prompt into a clear one in a side pane, with up to three quick questions, before anything is sent."
+    },
+    {
+      "name": "work-report",
+      "source": "./work-report",
+      "description": "A pane that shows the tasks Claude finished for you, the hours that likely saved, and what that time is worth."
+    },
+    {
+      "name": "mod-manager",
+      "source": "./mod-manager",
+      "description": "List every installed plugin/mod with its status and turn each one on or off, from /mods or a panel"
+    },
+    {
+      "name": "cache-handoff",
+      "source": "./cache-handoff",
+      "description": "A bar above the prompt showing time left on the prompt cache, a Keep cache switch that sends a short 'Hi' 5 minutes before it expires, and a Create Handoff button for ctx-handoff"
+    },
+    {
+      "name": "replay-button",
+      "source": "./replay-button",
+      "description": "A Replay button in the status bar that opens Replay Theater's step-through of the last turn's file edits"
+    },
+    {
+      "name": "filetree-button",
+      "source": "./filetree-button",
+      "description": "A Files button in the status bar that shows or hides the filetree mod's file tree"
+    },
+    {
+      "name": "inject-prompt",
+      "source": "./inject-prompt",
+      "description": "An Inject button in the status bar that opens your saved prompts, grouped by category and filterable by tag or search, and inserts the ones you pick at the cursor"
+    },
+    {
+      "name": "git-review",
+      "source": "./git-review",
+      "description": "A Git Review button that lists your GitLab merge requests by project and starts a full review of one in a new terminal: conflicts, worktree, pipelines and scans, Sonar, and the project's own code review"
+    }
+  ]
+}

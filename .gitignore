@@ -1,0 +1,9 @@
+node_modules/
+.claude-plugin/types/
+*/.claude-plugin/types/
+tsconfig.json
+__pycache__/
+*.pyc
+.in_use
+.orphaned_at
+.DS_Store
