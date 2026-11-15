@@ -1,6 +1,6 @@
 {
   "name": "prompt-upgrade",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Turns a rough prompt into a clear one in a side pane, with up to three quick questions, before anything is sent.",
   "author": { "name": "nad-dev-1" },
   "license": "MIT",

@@ -709,8 +709,6 @@ export const register: Register = on => {
         >
           <Text color={C.gold}>Work report</Text>
         </Button>,
-      undefined,
-      e.viewport?.columns,
     ) as never
   }).catch(($, e, next) => next(e))
 

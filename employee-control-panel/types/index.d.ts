@@ -42,6 +42,8 @@ declare module 'claude-code' {
       sub: Shaped<SubPicks>
       tokens: Shaped<Tokens>
       git: Shaped<GitInfo>
+      /** The prompt column's width in cells, measured from the band above it; 0 before. */
+      promptWidth: number
     }
   }
 }

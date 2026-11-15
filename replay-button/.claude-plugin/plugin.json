@@ -1,6 +1,6 @@
 {
   "name": "replay-button",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "A Replay button in the status bar that opens Replay Theater's step-through of the last turn's file edits",
   "types": "./types/index.d.ts"
 }

@@ -38,8 +38,14 @@ function keyOf(node: TreeNode): string {
   return typeof k === 'string' ? k : ''
 }
 
-/** The Buttons of a tree in drawing order, and its `status-left` part, if any. */
-function gather(node: unknown, found: { buttons: TreeNode[]; left: TreeNode | null }): void {
+type Found = { buttons: TreeNode[]; left: TreeNode | null; width: number | undefined }
+
+/**
+ * The Buttons of a tree in drawing order, its `status-left` part, and the
+ * width a bar beneath was laid out to (Control Tools measures the room the
+ * prompt really has, which shrinks while a dialog is docked beside it).
+ */
+function gather(node: unknown, found: Found): void {
   if (Array.isArray(node)) {
     for (const n of node) gather(n, found)
 
@@ -47,6 +53,8 @@ function gather(node: unknown, found: { buttons: TreeNode[]; left: TreeNode | nu
   }
   if (!node || typeof node !== 'object') return
   const o = node as TreeNode
+  const w = o.props?.width
+  if (keyOf(o) === 'status-root' && found.width === undefined && typeof w === 'number' && w > 0) found.width = w
   if (keyOf(o) === 'status-left') {
     found.left ??= o
 
@@ -70,7 +78,8 @@ function rank(key: string): number {
  * The whole status bar: the modes and the status lines on the left, every
  * button in a three-row grid on the right. `mine` is the calling mod's own
  * Button, `left` its status lines when it draws them, `barWidth` the width
- * the bar draws into (`e.viewport?.columns`).
+ * the bar draws into, when the caller knows it (Control Tools does); left
+ * out, the width a bar beneath was laid out to is kept.
  */
 export function statusGrid(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -82,7 +91,7 @@ export function statusGrid(
   barWidth?: number,
 ): unknown {
   const { Box, Text } = els
-  const found: { buttons: TreeNode[]; left: TreeNode | null } = { buttons: [], left: null }
+  const found: Found = { buttons: [], left: null, width: undefined }
   gather(below, found)
   const all = [...found.buttons, mine as TreeNode]
   const seen = new Set<string>()
@@ -113,7 +122,7 @@ export function statusGrid(
       alignItems="flex-start"
       justifyContent="space-between"
       flexGrow={1}
-      width={barWidth && barWidth > 0 ? barWidth : undefined}
+      width={barWidth && barWidth > 0 ? barWidth : found.width}
     >
       <Box key="status-left-side" flexDirection="row" flexShrink={1}>
         {modes.length > 0 ? <Text dimColor>{`${modes.join(' & ')}   `}</Text> : null}

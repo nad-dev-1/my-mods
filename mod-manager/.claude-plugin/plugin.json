@@ -1,6 +1,6 @@
 {
   "name": "mod-manager",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "A ≡ Mods button in the status bar opens a sheet listing every installed plugin/mod with an on/off switch; also /mods",
   "types": "./types/index.d.ts"
 }

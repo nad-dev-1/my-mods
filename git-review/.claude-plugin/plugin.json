@@ -1,6 +1,6 @@
 {
   "name": "git-review",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Git Review: a status-bar button opens your GitLab merge requests (yours and your group's), grouped by project; pick one and a new terminal runs a full review: conflicts, worktree, pipelines and scans, Sonar, the project's own code review, and a files-and-secrets check of every commit.",
   "author": {
     "name": "nad-dev-1"

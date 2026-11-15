@@ -362,3 +362,25 @@ test('text typed in the box while the dialog was open is kept, and the prompt go
   expect(w.box).toEqual({ text: 'typed Hello there.meanwhile', cursor: 'typed Hello there.'.length })
   await ui.unmount()
 })
+
+test('the status-bar grid keeps the width Control Tools measured for the bar', async ($, on) => {
+  world(on)
+  // Control Tools' bar beneath, laid out to a measured 123 cells.
+  on('ui.render', { component: 'SessionMode' }, ($t: any, e: any) => {
+    const { Box, Text } = $t.ui.resolve(e)
+
+    return (
+      <Box key="status-root" flexDirection="row" width={123}>
+        <Box key="status-left" flexDirection="column">
+          <Text>status</Text>
+        </Box>
+      </Box>
+    )
+  })
+  await start($)
+  const bar = await $.ui.mount({ ...STATUS_BAR, surface: 'terminal', viewport: { columns: 200, rows: 40 } } as any)
+  const root: any = await bar.find({ type: 'Box', key: 'status-root' })
+  expect((root?.props ?? root).width).toBe(123)
+  expect(await bar.find({ type: 'Button', key: 'open-inject' })).toBeTruthy()
+  await bar.unmount()
+})
