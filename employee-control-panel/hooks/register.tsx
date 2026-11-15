@@ -43,10 +43,7 @@ const NO_TOKENS: Tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
 const tokens = atom({ plugin: 'employee-control-panel', key: 'tokens' } as const, NO_TOKENS, { shape: 'tokens-1' })
 const NO_GIT: GitInfo = { branch: '', added: 0, removed: 0 }
 const git = atom({ plugin: 'employee-control-panel', key: 'git' } as const, NO_GIT, { shape: 'git-1' })
-const promptWidth = atom({ plugin: 'employee-control-panel', key: 'promptWidth' } as const, 0)
 
-/** The prompt column's width last measured, so a redraw is asked only on a change. */
-let measuredWidth = 0
 
 /** The video's palette: orange accent, pink effort, green for what is live. */
 const C = {
@@ -452,23 +449,6 @@ export const register: Register = on => {
     return r
   }).catch(($, e, next) => next(e))
 
-  // The band above the prompt is told the prompt column's real width, which
-  // shrinks while a dialog is docked beside the conversation (the window's
-  // own width does not). Measure it there, draw nothing, and lay the status
-  // bar out to it. A drawing may not write state, so the write waits a tick.
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    // The band's cells, plus the engine's five at its right end.
-    const width = e.props.bodyColumns > 0 ? e.props.bodyColumns + 5 : 0
-    if (width > 0 && width !== measuredWidth) {
-      measuredWidth = width
-      $.clock.after(0, () => {
-        void update($, promptWidth, () => width)
-      })
-    }
-
-    return next(e)
-  })
-
   // The footer: the live session bar on three lines, as ccstatusline drew
   // them, with the Control Tools button at the end of the first.
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
@@ -519,18 +499,20 @@ export const register: Register = on => {
         if (i > 0) {
           out.push(
             <Text key={`${key}-sep-${i}`} color={C.rule}>
-              {'  │  '}
+              {' │ '}
             </Text>,
           )
         }
         out.push(x)
       })
 
+      // One Text per line: short of room it is cut at its end, never broken
+      // into a column of fragments.
       return (
-        <Box key={key} flexDirection="row">
+        <Text key={key} wrap="truncate-end">
           {out as ReturnType<typeof seg>[]}
           {tail as ReturnType<typeof seg>}
-        </Box>
+        </Text>
       )
     }
 
@@ -617,18 +599,17 @@ export const register: Register = on => {
     // The status lines on the left; every mod's button, this one's first, in
     // the grid to their right.
     const statusLeft = (
-      <Box key="status-left" flexDirection="column">
+      <Box key="status-left" flexDirection="column" flexShrink={1}>
         {line1}
         {line2}
         {line3}
       </Box>
     )
 
-    // The prompt column's measured width (narrower beside a docked dialog),
-    // else the window's.
-    const roomy = await read($, promptWidth)
-
-    return statusGrid({ Box, Text }, below, modes, button, statusLeft, roomy > 0 ? roomy : e.viewport?.columns) as ReturnType<typeof seg>
+    // No width of our own: the bar takes the room the footer gives it (the
+    // engine's notices hold the footer's left part), the grid keeps its size
+    // at the right end and the status lines are cut short instead.
+    return statusGrid({ Box, Text }, below, modes, button, statusLeft) as ReturnType<typeof seg>
   })
 
   // The panel.

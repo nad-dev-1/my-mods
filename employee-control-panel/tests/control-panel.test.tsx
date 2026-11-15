@@ -425,47 +425,16 @@ test('the status lines hold the left edge and the buttons the right edge of the 
   const bar = await $.ui.mount({ ...STATUS_BAR, surface: 'terminal', viewport: { columns: 180, rows: 40 } } as any)
   const root: any = await bar.find({ type: 'Box', key: 'status-root' })
   const props = root?.props ?? root
-  expect(props.width).toBe(180)
+  // No width of its own: it takes the room the footer gives it, the two sides spaced apart.
+  expect(props.width).toBeUndefined()
+  expect(props.flexGrow).toBe(1)
   expect(props.justifyContent).toBe('space-between')
-  // Left side first, the grid last: the space between pushes them apart.
   const boxes = (await bar.findAll({ type: 'Box' })).map((b: any) => b.key ?? b.props?.key)
   expect(boxes.indexOf('status-left-side')).toBeLessThan(boxes.indexOf('status-grid'))
+  // Each status line is one Text that is cut at its end when short of room,
+  // never broken into a column of fragments.
+  const texts: any[] = await bar.findAll({ type: 'Text' })
+  const cut = texts.filter(t => (t.props ?? t).wrap === 'truncate-end')
+  expect(cut.length).toBeGreaterThanOrEqual(3)
   await bar.unmount()
-})
-
-test('beside a docked dialog the bar narrows to the room the prompt really has', async ($, on) => {
-  const w = world(on)
-  await start($)
-  const band = (bodyColumns: number) =>
-    ({
-      plugin: PLUGIN,
-      component: 'AbovePrompt',
-      surface: 'terminal',
-      props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns, scroll: { offset: 0, bodyRows: 9 }, view: {} },
-    }) as any
-  const rootWidth = async () => {
-    const bar = await $.ui.mount({ ...STATUS_BAR, surface: 'terminal', viewport: { columns: 200, rows: 40 } } as any)
-    const root: any = await bar.find({ type: 'Box', key: 'status-root' })
-    await bar.unmount()
-
-    return (root?.props ?? root).width
-  }
-
-  // No dialog: the prompt column is the window's width.
-  const full = await $.ui.mount(band(195))
-  await w.clock.advance(10)
-  await full.unmount()
-  expect(await rootWidth()).toBe(200)
-
-  // A dialog docked beside the conversation: the prompt column is narrower.
-  const docked = await $.ui.mount(band(115))
-  await w.clock.advance(10)
-  await docked.unmount()
-  expect(await rootWidth()).toBe(120)
-
-  // Closed again: back to the full width.
-  const back = await $.ui.mount(band(195))
-  await w.clock.advance(10)
-  await back.unmount()
-  expect(await rootWidth()).toBe(200)
 })
