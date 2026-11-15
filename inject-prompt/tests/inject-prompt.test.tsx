@@ -166,8 +166,9 @@ test('Inject puts the prompt where the cursor was, around the draft', async ($, 
   await start($)
   await openFromBar($, w)
 
-  // The draft was set aside so the dialog could take the keyboard.
-  expect(w.fills[0]).toEqual({ text: '', cursor: undefined })
+  // Opening leaves the draft in the box.
+  expect(w.fills).toEqual([])
+  expect(w.box).toEqual({ text: 'Start. End.', cursor: 7 })
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' } as any)
   await ui.press({ key: 'sel#hello' })
@@ -219,8 +220,9 @@ test('closing without injecting puts the draft back untouched', async ($, on) =>
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' } as any)
 
   await ui.press({ key: 'close' })
-  const last = w.fills[w.fills.length - 1]!
-  expect(last).toEqual({ text: 'my draft', cursor: 2 })
+  await w.clock.settle()
+  expect(w.fills).toEqual([])
+  expect(w.box).toEqual({ text: 'my draft', cursor: 2 })
   expect(w.closes).toContain(PLUGIN)
   await ui.unmount()
 })
@@ -310,17 +312,15 @@ test('a placeholder with a default offers it, and every use of the name is fille
   await ui.unmount()
 })
 
-test('when the box refuses the draft at first, it is tried again until it is back', async ($, on) => {
+test('opening from the status bar never empties the prompt box', async ($, on) => {
   const w = world(on, { text: 'my draft', cursor: 2 })
   await start($)
   await openFromBar($, w)
-  expect(w.box.text).toBe('')
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' } as any)
 
-  w.refuse = 2
-  await ui.press({ key: 'close' })
-  await w.clock.advance(5_000)
+  expect(w.fills).toEqual([])
   expect(w.box).toEqual({ text: 'my draft', cursor: 2 })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' } as any)
+  expect(await ui.find({ type: 'Text', text: /Your draft stays in the prompt box/ })).toBeTruthy()
   await ui.unmount()
 })
 
@@ -338,42 +338,27 @@ test('an injected prompt still lands with the draft when the box refuses at firs
   await ui.unmount()
 })
 
-test('a reload while the dialog is open gives the draft back', async ($, on) => {
+test('a reload while the dialog is open leaves the draft alone', async ($, on) => {
   const w = world(on, { text: 'my draft', cursor: 8 })
   await start($)
   await openFromBar($, w)
-  expect(w.box.text).toBe('')
 
   await start($)
   await w.clock.advance(5_000)
+  expect(w.fills).toEqual([])
   expect(w.box.text).toBe('my draft')
 })
 
-test('text typed in the box while the dialog was open is kept on close', async ($, on) => {
+test('text typed in the box while the dialog was open is kept, and the prompt goes in at its cursor', async ($, on) => {
   const w = world(on, { text: 'my draft', cursor: 8 })
   await start($)
   await openFromBar($, w)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' } as any)
 
-  w.box = { text: 'typed meanwhile', cursor: 15 }
-  await ui.press({ key: 'close' })
+  w.box = { text: 'typed meanwhile', cursor: 6 }
+  await ui.press({ key: 'sel#hello' })
+  await ui.press({ key: 'inject' })
   await w.clock.settle()
-  expect(w.box.text).toContain('my draft')
-  expect(w.box.text).toContain('typed meanwhile')
-  await ui.unmount()
-})
-
-test('when the box would not be emptied, nothing is put back over it later', async ($, on) => {
-  const w = world(on, { text: 'my draft', cursor: 8 })
-  w.refuse = 1
-  await start($)
-  await openFromBar($, w)
-  expect(w.box.text).toBe('my draft')
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' } as any)
-
-  w.box = { text: 'my draft, edited', cursor: 16 }
-  await ui.press({ key: 'close' })
-  await w.clock.settle()
-  expect(w.box.text).toBe('my draft, edited')
+  expect(w.box).toEqual({ text: 'typed Hello there.meanwhile', cursor: 'typed Hello there.'.length })
   await ui.unmount()
 })

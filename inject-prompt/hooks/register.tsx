@@ -212,30 +212,19 @@ async function addPrompt($: E$, f: AddForm): Promise<string> {
 // ---------------------------------------------------------------------------
 
 /**
- * Opens the dialog. The draft in the prompt box is set aside first (a pane
- * only takes the keyboard over an empty box) and put back on close, with the
- * injected text at the cursor.
+ * Opens the dialog. The draft in the prompt box is never touched: it stays
+ * where it is, and an injected prompt goes in at its cursor on close. With a
+ * draft in the box the dialog opens without the keyboard (a pane only takes
+ * it over an empty box), so a click in the dialog hands it over.
  */
 async function openDialog($: E$): Promise<void> {
   if (await read($, isOpen)) return
-  // A draft still on its way back from the last close lands first.
+  // A put-back still landing from the last close goes first.
   if (restoring) await restoring
+  // A draft an earlier version of this mod set aside comes back now.
   if (await read($, stash)) await putBack($, '')
-  let box: Stash = { text: '', cursor: 0 }
-  try {
-    box = await $.prompt.read()
-  } catch {
-    // no prompt box: nothing to set aside
-  }
-  if (box.text) {
-    // Kept for the close only once the box really is empty: a refused clear
-    // leaves the draft where it is, and nothing is written over it later.
-    await update($, stash, () => ({ text: box.text, cursor: box.cursor }))
-    const cleared = await $.prompt.fill({ text: '', mode: 'replace' }).catch(() => undefined)
-    if (!cleared?.isFilled) await update($, stash, () => null)
-  } else {
-    await update($, stash, () => null)
-  }
+  const box = await $.prompt.read().catch(() => ({ text: '', cursor: 0 }))
+  await update($, note, () => (box.text.trim() ? 'Your draft stays in the prompt box. Click in here to use the keys.' : ''))
   await loadPrompts($)
   await update($, view, () => 'list')
   await update($, fill, () => null)
@@ -291,24 +280,31 @@ function restoreDraft($: E$, insert: string): Promise<void> {
 }
 
 /**
- * Puts the set-aside draft back, with `insert` at its cursor. The draft stays
- * set aside until the box has taken it: a refused fill is tried again, and
- * text typed in the box meanwhile is kept after it. When the box never takes
- * it, the text goes on the clipboard so it is not lost.
+ * Puts `insert` in the prompt box at its cursor, keeping the draft around it.
+ * A draft an earlier version of this mod set aside (`stash`) comes back too,
+ * before anything typed since. A refused fill is tried again; when the box
+ * never takes it, the text goes on the clipboard so it is not lost.
  */
 async function putBack($: E$, insert: string): Promise<void> {
   const kept = await read($, stash)
   if (!kept && !insert) return
-  const before = kept ? kept.text.slice(0, kept.cursor) : ''
-  const after = kept ? kept.text.slice(kept.cursor) : ''
-  const body = before + insert + after
+  let body = insert
   for (let attempt = 0; ; attempt++) {
     const now = await $.prompt.read().catch(() => ({ text: '', cursor: 0 }))
-    const typed = now.text.trim() ? now.text : ''
-    const text = typed ? `${body}${body.endsWith('\n') ? '' : '\n'}${typed}` : body
-    const done = await $.prompt
-      .fill({ text, mode: 'replace', cursor: before.length + insert.length })
-      .catch(() => undefined)
+    let text: string
+    let cursor: number
+    if (kept) {
+      const before = kept.text.slice(0, kept.cursor)
+      body = before + insert + kept.text.slice(kept.cursor)
+      const typed = now.text.trim() ? now.text : ''
+      text = typed ? `${body}${body.endsWith('\n') ? '' : '\n'}${typed}` : body
+      cursor = before.length + insert.length
+    } else {
+      const at = Math.min(Math.max(0, now.cursor), now.text.length)
+      text = now.text.slice(0, at) + insert + now.text.slice(at)
+      cursor = at + insert.length
+    }
+    const done = await $.prompt.fill({ text, mode: 'replace', cursor }).catch(() => undefined)
     if (done?.isFilled) {
       await update($, stash, () => null)
 
@@ -426,10 +422,10 @@ async function saveForm($: E$): Promise<void> {
 }
 
 async function startAdd($: E$): Promise<void> {
-  // Start from the draft that was in the box, when there was one.
-  const kept = await read($, stash)
+  // Start from the draft in the prompt box, when there is one.
+  const box = await $.prompt.read().catch(() => ({ text: '', cursor: 0 }))
   const current = await read($, form)
-  await update($, form, () => ({ ...current, text: current.text || kept?.text || '' }))
+  await update($, form, () => ({ ...current, text: current.text || box.text || '' }))
   await update($, view, () => 'add')
 }
 

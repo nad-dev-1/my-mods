@@ -29,4 +29,4 @@ A file that does not parse is never overwritten: the dialog says why, and you fi
 ## Notes
 
 - Clicking status-bar buttons needs the fullscreen layout (`/tui fullscreen`); `/inject` works anywhere.
-- While the dialog is open your draft is set aside (a dialog only takes the keyboard over an empty prompt box) and comes back on close, with the injected text at the cursor.
+- Your draft stays in the prompt box while the dialog is open, and the injected text goes in at its cursor. With a draft in the box the dialog opens without the keyboard (a dialog only takes it over an empty prompt box): click in the dialog to use its keys.
