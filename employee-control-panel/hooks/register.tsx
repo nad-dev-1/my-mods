@@ -603,7 +603,7 @@ export const register: Register = on => {
       </Box>
     )
 
-    return statusGrid({ Box, Text }, below, modes, button, statusLeft) as ReturnType<typeof seg>
+    return statusGrid({ Box, Text }, below, modes, button, statusLeft, e.viewport?.columns) as ReturnType<typeof seg>
   })
 
   // The panel.

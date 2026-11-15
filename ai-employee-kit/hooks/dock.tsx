@@ -1011,6 +1011,8 @@ export function registerDock(on: On): void {
         >
           <Text color={C.coral}>◆ Dock</Text>
         </Button>,
+      undefined,
+      e.viewport?.columns,
     ) as never
   }).catch(($, e, next) => next(e))
 

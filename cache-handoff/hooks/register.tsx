@@ -365,6 +365,8 @@ export const register: Register = on => {
           </Text>
           <Text color={fill}>▌</Text>
         </Button>,
+      undefined,
+      e.viewport?.columns,
     ) as never
   })
 

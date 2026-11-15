@@ -418,3 +418,17 @@ test('every mod\'s button sits in a 3-row grid, in a fixed order, and still answ
   await bar.unmount()
   void w
 })
+
+test('the status lines hold the left edge and the buttons the right edge of the bar', async ($, on) => {
+  world(on)
+  await start($)
+  const bar = await $.ui.mount({ ...STATUS_BAR, surface: 'terminal', viewport: { columns: 180, rows: 40 } } as any)
+  const root: any = await bar.find({ type: 'Box', key: 'status-root' })
+  const props = root?.props ?? root
+  expect(props.width).toBe(180)
+  expect(props.justifyContent).toBe('space-between')
+  // Left side first, the grid last: the space between pushes them apart.
+  const boxes = (await bar.findAll({ type: 'Box' })).map((b: any) => b.key ?? b.props?.key)
+  expect(boxes.indexOf('status-left-side')).toBeLessThan(boxes.indexOf('status-grid'))
+  await bar.unmount()
+})

@@ -1,6 +1,6 @@
 {
   "name": "employee-control-panel",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "A Control Tools button in the status bar that opens a panel to switch the model and effort level for Claude and for its subagents, with a live status line",
   "author": { "name": "nad-dev-1" },
   "license": "MIT",

@@ -5,7 +5,8 @@
 // What the hooks beneath drew arrives as plain data. Every Button in it is
 // gathered (each still answers its own mod's press), sorted into a fixed
 // order and laid out in a grid of three rows, filled column by column, to the
-// right of the status lines (the Box keyed `status-left`, kept as drawn).
+// right edge of the bar, the status lines (the Box keyed `status-left`, kept
+// as drawn) at its left edge.
 // Anything else the hooks beneath drew is drawn again from `modes`.
 
 /** Rows of the grid; the columns follow from the number of buttons. */
@@ -66,9 +67,10 @@ function rank(key: string): number {
 }
 
 /**
- * The whole status bar: the modes, the status lines, then every button in a
- * three-row grid. `mine` is the calling mod's own Button, `left` its status
- * lines when it draws them.
+ * The whole status bar: the modes and the status lines on the left, every
+ * button in a three-row grid on the right. `mine` is the calling mod's own
+ * Button, `left` its status lines when it draws them, `barWidth` the width
+ * the bar draws into (`e.viewport?.columns`).
  */
 export function statusGrid(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -77,6 +79,7 @@ export function statusGrid(
   modes: readonly string[],
   mine: unknown,
   left?: unknown,
+  barWidth?: number,
 ): unknown {
   const { Box, Text } = els
   const found: { buttons: TreeNode[]; left: TreeNode | null } = { buttons: [], left: null }
@@ -101,11 +104,22 @@ export function statusGrid(
   })
   const statusLines = left ?? found.left
 
+  // The bar fills the width it is given: the status lines hold the left
+  // edge, the grid the right edge.
   return (
-    <Box key="status-root" flexDirection="row" alignItems="flex-start">
-      {modes.length > 0 ? <Text dimColor>{`${modes.join(' & ')}   `}</Text> : null}
-      {statusLines ?? null}
-      <Box key="status-grid" flexDirection="row" marginLeft={3}>
+    <Box
+      key="status-root"
+      flexDirection="row"
+      alignItems="flex-start"
+      justifyContent="space-between"
+      flexGrow={1}
+      width={barWidth && barWidth > 0 ? barWidth : undefined}
+    >
+      <Box key="status-left-side" flexDirection="row" flexShrink={1}>
+        {modes.length > 0 ? <Text dimColor>{`${modes.join(' & ')}   `}</Text> : null}
+        {statusLines ?? null}
+      </Box>
+      <Box key="status-grid" flexDirection="row" flexShrink={0} marginLeft={3}>
         {columns.map((col, i) => (
           <Box key={`status-grid-col-${i}`} flexDirection="column" marginRight={1}>
             {col}
