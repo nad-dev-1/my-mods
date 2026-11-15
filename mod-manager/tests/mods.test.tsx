@@ -37,6 +37,7 @@ function fakeCli(
         scope: 'user',
         version: '1.0.0',
         enabled: isOn,
+        installPath: `/inst/${key.split('@')[0]}`,
       }))
       // Installed for another project, twice: never shown here.
       const elsewhere = {
@@ -60,6 +61,12 @@ function fakeCli(
     }
 
     return { value: { exitCode: 1, stdout: '', stderr: 'unknown' } }
+  })
+  on('fs.read', (_: unknown, e: any) => {
+    const m = /^\/inst\/([a-z]+)\/\.claude-plugin\/plugin\.json$/.exec(e.path)
+    if (!m) throw new Error('missing')
+
+    return { value: JSON.stringify({ name: m[1], description: `The ${m[1]} mod, which does a useful thing. More words after.` }) }
   })
   on('command.register', () => ({ value: { command: 'mods' } }))
   on('ui.open', (_: unknown, e: any) => {
@@ -135,7 +142,7 @@ test('a row in the panel is a switch: a press turns the mod on', async ($, on) =
   }
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: / ● OFF / })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^ ○ Off $/ })).toBeTruthy()
   await ui.press({ key: 'beta@market#user' })
 
   expect(calls).toContainEqual([
@@ -223,14 +230,14 @@ test('a second press on the Mods button closes the sheet', async ($, on) => {
   await bar.unmount()
 })
 
-test('each sheet row ends in a switch that reads ON or OFF', async ($, on) => {
+test('each sheet row ends in a switch that reads On or Off', async ($, on) => {
   fakeCli(on, [])
   await start($)
   await $.command.run({ command: 'mods' })
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /^ {2}ON ● $/ })).toBeTruthy()
-  expect(await ui.find({ type: 'Text', text: /^ ● OFF $/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^ ● On {2}$/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^ ○ Off $/ })).toBeTruthy()
   await ui.unmount()
 })
 
@@ -307,4 +314,35 @@ test('/mods tells the person which keys drive the panel', async ($, on) => {
 
   expect(text).toContain('j/k')
   expect(text).toContain('ctrl+x then Tab')
+})
+
+test('rows look like the video: a dot, the name, a short description and an On/Off switch', async ($, on) => {
+  const calls: string[][] = []
+  fakeCli(on, calls)
+  await start($)
+  await $.command.run({ command: 'mods' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  // On: a green dot and a filled switch; off: a hollow dot and a plain switch.
+  expect(await ui.find({ type: 'Text', text: /^ ● On  $/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^ ○ Off $/ })).toBeTruthy()
+  const texts = (await ui.findAll({ type: 'Text' })).map((t: any) => t.text ?? '').join('\n')
+  expect(texts).toMatch(/● \nalpha/)
+  expect(texts).toMatch(/○ \nbeta/)
+  // The first sentence of the manifest's description, without the rest.
+  expect(texts).toContain('The alpha mod, which does a useful thing')
+  expect(texts).not.toContain('More words after')
+  await ui.unmount()
+})
+
+test('the highlighted row shows its full id, scope and version underneath', async ($, on) => {
+  const calls: string[][] = []
+  fakeCli(on, calls)
+  await start($)
+  await $.command.run({ command: 'mods' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'beta@market#user' })
+
+  expect(await ui.find({ type: 'Text', text: /beta@market · user · v1\.0\.0/ })).toBeTruthy()
+  await ui.unmount()
 })

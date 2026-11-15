@@ -4,11 +4,19 @@ A Claude Code mod that switches the model and effort level without typing `/mode
 
 ## Using it
 
-The status bar has a **» Control Tools** button. It also shows what is in force, for example `» Control Tools · Opus · high · sub: Haiku/low`. Click it, or type `/controls`, to open the panel:
+The footer under the prompt shows a live session bar, then the **◆ Control Tools ∧** button:
 
-- **Main → Model**: Fable, Opus, Sonnet or Haiku (each picks the latest of its family).
-- **Main → Effort**: low, medium, high, xhigh or max.
+```
+◆ Subscription │ ◆ Opus 5.5 │ effort high │ ctx ▰▰▱▱▱▱▱▱▱▱ 18% │ 5h 6% │ ◇ 0 agents │ sub Haiku/low   ◆ Control Tools ∧
+```
+
+The effort is colour-coded (low grey, medium blue, high amber, xhigh red, max violet), and the bar updates the moment a pick lands, after each reply, and as agents start and finish. Click the button, or type `/controls`, to open the panel: a spaced `◆ C O N T R O L   T O O L S` header with the current pick on the right, then compact tab rows with the pick highlighted (orange for models, pink for effort):
+
+- **Main → Model**: Haiku, Sonnet, Opus or Fable, shown with versions (each picks the latest of its family; the one in use shows its live version).
+- **Main → Effort**: Low, Medium, High, XHigh or Max.
 - **Subagents → Model / Effort**: Auto (Claude Code decides, as usual) or a fixed choice.
+
+The design follows "Mod 2: Employee Control Panel" in Tristen O'Brien's video *Claude Code Just Dropped MODS*.
 
 A status line under the controls shows the result of each pick:
 

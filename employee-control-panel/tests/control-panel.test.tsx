@@ -113,13 +113,13 @@ async function openPanel($: any, w: World) {
   return $.ui.mount({ ...PANE, surface: 'terminal' } as any)
 }
 
-/** Whether the status-bar button's text matches `re`. */
+/** Whether the footer row's text, every piece joined, matches `re`. */
 async function barHas($: any, re: RegExp): Promise<boolean> {
   const bar = await $.ui.mount({ ...STATUS_BAR, surface: 'terminal' } as any)
-  const found = await bar.find({ type: 'Text', text: new RegExp(`^» Control Tools.*${re.source}`) })
+  const texts = (await bar.findAll({ type: 'Text' })).map((t: any) => t.text ?? '').join(' ')
   await bar.unmount()
 
-  return Boolean(found)
+  return re.test(texts)
 }
 
 for (const surface of ['terminal', 'desktop'] as const) {
@@ -127,7 +127,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const w = world(on)
     await start($)
     const bar = await $.ui.mount({ ...STATUS_BAR, surface } as any)
-    expect(await bar.find({ type: 'Text', text: /^» Control Tools · Opus/ })).toBeTruthy()
+    expect(await bar.find({ type: 'Text', text: /Control Tools/ })).toBeTruthy()
     await bar.press({ key: 'open-controls' })
     await w.clock.settle()
     await bar.unmount()
@@ -159,7 +159,7 @@ test('picking a model runs /model, keeps the panel open and shows it applied', a
   expect(await ui.find({ type: 'Text', text: /Main: Sonnet 5\.5/ })).toBeTruthy()
   expect(await ui.find({ type: 'Text', text: /applied/ })).toBeTruthy()
   expect(w.closes).not.toContain(PANE_ID)
-  expect(await barHas($, /Sonnet/)).toBe(true)
+  expect(await barHas($, /Sonnet 5\.5/)).toBe(true)
   await ui.unmount()
 })
 
@@ -172,22 +172,22 @@ test('picking an effort runs /effort and the status shows it', async ($, on) => 
   await w.clock.settle()
   expect(w.runs).toContainEqual({ command: 'effort', args: 'xhigh' })
   expect(await ui.find({ type: 'Text', text: /effort xhigh/ })).toBeTruthy()
-  expect(await barHas($, /xhigh/)).toBe(true)
+  expect(await barHas($, /effort\s+xhigh/)).toBe(true)
   await ui.unmount()
 })
 
 test('a /model or /effort typed by hand shows up live', async ($, on) => {
   const w = world(on)
   await start($)
-  expect(await barHas($, /low/)).toBe(false)
+  expect(await barHas($, /effort\s+low/)).toBe(false)
 
   await $.command.run({ command: 'effort', args: 'low' })
   await $.command.run({ command: 'model', args: 'haiku' })
   await w.clock.settle()
-  expect(await barHas($, /Haiku/)).toBe(true)
+  expect(await barHas($, /Haiku 5\.5/)).toBe(true)
   // The effort was set on Opus, and Haiku has none recorded yet.
   await $.command.run({ command: 'effort', args: 'medium' })
-  expect(await barHas($, /medium/)).toBe(true)
+  expect(await barHas($, /effort\s+medium/)).toBe(true)
 })
 
 test('a pick made while Claude is replying shows pending, then applies when the reply ends', async ($, on) => {
@@ -256,7 +256,7 @@ test('a subagent effort pick is set on every Agent call but a fork', async ($, o
   expect(w.calls.at(-1)!.effort).toBe('low')
   await $.tool.call({ tool: 'Agent', description: 'd', prompt: 'p', subagent_type: 'fork' })
   expect(w.calls.at(-1)!.effort).toBeUndefined()
-  expect(await barHas($, /sub: low/)).toBe(true)
+  expect(await barHas($, /sub\s+low/)).toBe(true)
   await ui.unmount()
 })
 
@@ -279,7 +279,7 @@ test('subagent picks are remembered per project', async ($, on) => {
   await start($)
   await $.agent.spawn({ prompt: 'y', subagentType: 'Explore' })
   expect(w.spawns.at(-1)!.model).toBe('sonnet')
-  expect(await barHas($, /sub: Sonnet\/high/)).toBe(true)
+  expect(await barHas($, /sub\s+Sonnet\/high/)).toBe(true)
 })
 
 test('Close shuts the panel, and the button opens it again', async ($, on) => {
@@ -299,4 +299,34 @@ test('/controls opens the panel', async ($, on) => {
   await start($)
   await $.command.run({ command: 'controls', args: '' })
   expect(w.opens.some(o => o.id === PANE_ID)).toBe(true)
+})
+
+test('the footer shows the live session bar: plan, context, 5h usage and agents', async ($, on) => {
+  const w = world(on)
+  on('session.usage', () => ({
+    value: { startedAt: 0, context: { window: 200_000, tokens: 36_000, percent: 18 }, rateLimits: [{ kind: 'five_hour', percentUsed: 6 }] },
+  }))
+  on('agent.list', () => ({ value: [{ id: 'a1', description: 'x', type: 'Explore', status: 'running' }] }))
+  await start($)
+  await $.command.run({ command: 'effort', args: 'high' })
+  await w.clock.settle()
+
+  expect(await barHas($, /◆ Subscription/)).toBe(true)
+  expect(await barHas($, /Opus 5\.5/)).toBe(true)
+  expect(await barHas($, /effort\s+high/)).toBe(true)
+  expect(await barHas($, /ctx\s+▰▰▱▱▱▱▱▱▱▱\s+18%/)).toBe(true)
+  expect(await barHas($, /5h\s+6%/)).toBe(true)
+  expect(await barHas($, /◆ 1 agent\b/)).toBe(true)
+  expect(await barHas($, /◆ Control Tools ∧/)).toBe(true)
+})
+
+test('the panel shows the video layout: spaced title, current pick, full model names', async ($, on) => {
+  const w = world(on)
+  await start($)
+  const ui = await openPanel($, w)
+  const texts = (await ui.findAll({ type: 'Text' })).map((t: any) => t.text ?? '').join(' ')
+  expect(texts).toMatch(/◆ C O N T R O L {3}T O O L S/)
+  expect(texts).toMatch(/Opus 5\.5 · Default/)
+  for (const name of ['Haiku 5.5', 'Sonnet 5.5', 'Opus 5.5', 'Fable 5.2', 'XHigh']) expect(texts).toContain(name)
+  await ui.unmount()
 })

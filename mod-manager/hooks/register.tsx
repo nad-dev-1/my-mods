@@ -9,7 +9,7 @@ const TITLE = 'Mods'
 // Change the shape tag when ModInfo's fields change: it declines what an
 // earlier version stored, which outlives a reload.
 const mods = atom({ plugin: 'mod-manager', key: 'mods' } as const, [], {
-  shape: 'mods-2',
+  shape: 'mods-3',
 })
 const note = atom({ plugin: 'mod-manager', key: 'note' } as const, '')
 const busy = atom({ plugin: 'mod-manager', key: 'busy' } as const, '')
@@ -45,10 +45,13 @@ const C = {
   yellow: '#D29922',
 }
 
-/** A switch is this many cells wide, on or off, so the rows line up. */
+/**
+ * A switch is this many cells wide, on or off, so the rows line up. As in
+ * the Employee Control Panel video: a filled green "● On", a plain "○ Off".
+ */
 const SWITCH = {
-  on: '  ON ● ',
-  off: ' ● OFF ',
+  on: ' ● On  ',
+  off: ' ○ Off ',
   busy: '  ···  ',
 } as const
 const SWITCH_WIDTH = 7
@@ -71,6 +74,31 @@ type CliEntry = {
   version?: unknown
   enabled?: unknown
   projectPath?: unknown
+  installPath?: unknown
+  readFromFolder?: unknown
+}
+
+/** The first sentence of a description, for a one-line row. */
+function firstSentence(text: string): string {
+  const one = text.replace(/\s+/g, ' ').trim()
+  const end = one.search(/[.!?](\s|$)/)
+
+  return end > 0 ? one.slice(0, end) : one
+}
+
+/** The mod's own description, from the manifest in its folder; '' when none. */
+async function descriptionOf($: EngineInterface, entry: CliEntry): Promise<string> {
+  const folders = [entry.readFromFolder, entry.installPath].filter((f): f is string => typeof f === 'string' && f !== '')
+  for (const folder of folders) {
+    try {
+      const manifest = JSON.parse(String(await $.fs.read(`${folder}/.claude-plugin/plugin.json`))) as { description?: unknown }
+      if (typeof manifest.description === 'string') return firstSentence(manifest.description)
+    } catch {
+      // no manifest there: try the next folder
+    }
+  }
+
+  return ''
 }
 
 /** The session's folder: local- and project-scope installs elsewhere are hidden. */
@@ -97,20 +125,24 @@ async function loadMods($: EngineInterface): Promise<ModInfo[]> {
   if (!Array.isArray(parsed)) throw new Error('unexpected plugin list output')
 
   const seen = new Set<string>()
-  const list: ModInfo[] = []
+  const kept: { p: CliEntry; id: string; scope: string }[] = []
   for (const p of parsed as CliEntry[]) {
     if (typeof p.id !== 'string' || !belongsHere(p)) continue
     const scope = typeof p.scope === 'string' ? p.scope : 'user'
     const key = `${p.id}#${scope}`
     if (seen.has(key)) continue
     seen.add(key)
-    list.push({
-      id: p.id,
+    kept.push({ p, id: p.id, scope })
+  }
+  const list: ModInfo[] = await Promise.all(
+    kept.map(async ({ p, id, scope }) => ({
+      id,
       scope,
       version: typeof p.version === 'string' ? p.version : '',
       isEnabled: p.enabled === true,
-    })
-  }
+      description: await descriptionOf($, p),
+    })),
+  )
 
   return list.sort((a, b) => a.id.localeCompare(b.id))
 }
@@ -588,40 +620,47 @@ export const register: Register = on => {
     const modRow = (m: ModInfo) => {
       const isCursor = cursorKey === rowKey(m)
       const isWorking = working === rowKey(m)
-      const [name = m.id, market = ''] = m.id.split('@')
+      const [name = m.id] = m.id.split('@')
       const switchText = isWorking ? SWITCH.busy : m.isEnabled ? SWITCH.on : SWITCH.off
-      // Indented under its group; the switch at the right edge of the sheet.
+      // As in the Employee Control Panel video: a status dot, the name, a dim
+      // one-line description, and the switch at the right edge of the sheet.
       const textWidth = Math.max(8, width - 4 - SWITCH_WIDTH - 2)
       const nameText = fit(name, Math.min(name.length, textWidth))
-      const metaText = fit(
-        `  ${market} · ${m.scope}`,
-        Math.max(0, textWidth - nameText.length),
-      )
+      const descText = m.description ? fit(`  ${m.description}`, Math.max(0, textWidth - nameText.length)) : ''
+      const pad = ' '.repeat(Math.max(0, textWidth - nameText.length - descText.length))
 
       return (
-        <Button
-          key={rowKey(m)}
-          plain
-          autoFocus={isCursor ? true : undefined}
-          label={`${m.isEnabled ? 'Turn off' : 'Turn on'} ${m.id}`}
-          onPress={toggleMod(m)}
-        >
-          <Text color={C.violet} bold>
-            {isCursor ? '▶   ' : '    '}
-          </Text>
-          <Text bold={isCursor || m.isEnabled} dimColor={!m.isEnabled && !isCursor}>
-            {nameText}
-          </Text>
-          <Text dimColor>{metaText}</Text>
-          <Text>{'  '}</Text>
-          <Text
-            backgroundColor={isWorking ? C.yellow : m.isEnabled ? C.on : C.off}
-            color={m.isEnabled || isWorking ? C.knob : C.muted}
-            bold
+        <Box key={`wrap-${rowKey(m)}`} flexDirection="column">
+          <Button
+            key={rowKey(m)}
+            plain
+            autoFocus={isCursor ? true : undefined}
+            label={`${m.isEnabled ? 'Turn off' : 'Turn on'} ${m.id}`}
+            onPress={toggleMod(m)}
           >
-            {switchText}
-          </Text>
-        </Button>
+            <Text color={C.violet} bold>
+              {isCursor ? '▶ ' : '  '}
+            </Text>
+            <Text color={m.isEnabled ? C.on : C.muted}>{m.isEnabled ? '● ' : '○ '}</Text>
+            <Text bold={isCursor || m.isEnabled} dimColor={!m.isEnabled && !isCursor}>
+              {nameText}
+            </Text>
+            <Text color={C.muted}>{descText}</Text>
+            <Text>{`${pad}  `}</Text>
+            <Text
+              backgroundColor={isWorking ? C.yellow : m.isEnabled ? C.on : undefined}
+              color={m.isEnabled || isWorking ? C.knob : C.muted}
+              bold={m.isEnabled || isWorking}
+            >
+              {switchText}
+            </Text>
+          </Button>
+          {isCursor && (
+            <Text key={`detail-${rowKey(m)}`} color={C.muted} wrap="truncate-end">
+              {`      ${m.id} · ${m.scope}${m.version ? ` · v${m.version}` : ''}`}
+            </Text>
+          )}
+        </Box>
       )
     }
 

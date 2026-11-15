@@ -4,6 +4,8 @@ export type ModInfo = {
   scope: string
   version: string
   isEnabled: boolean
+  /** The first sentence of the mod's own description; '' when it has none. */
+  description: string
 }
 
 /** Which rows the panel shows. */

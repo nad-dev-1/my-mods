@@ -13,13 +13,16 @@ type E$ = EngineInterface
 
 const PANE = 'control-tools'
 
-const MODELS: { alias: Alias; label: string }[] = [
-  { alias: 'fable', label: 'Fable' },
-  { alias: 'opus', label: 'Opus' },
-  { alias: 'sonnet', label: 'Sonnet' },
-  { alias: 'haiku', label: 'Haiku' },
+// In the video's order, cheapest first. `version` is the latest known when
+// this was written; the model in use always shows its live version instead.
+const MODELS: { alias: Alias; label: string; version: string }[] = [
+  { alias: 'haiku', label: 'Haiku', version: '5.5' },
+  { alias: 'sonnet', label: 'Sonnet', version: '5.5' },
+  { alias: 'opus', label: 'Opus', version: '5.5' },
+  { alias: 'fable', label: 'Fable', version: '5.2' },
 ]
 const LEVELS: Level[] = ['low', 'medium', 'high', 'xhigh', 'max']
+const LEVEL_LABEL: Record<Level, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max' }
 
 /** What a command's output says when it did not take. */
 const REFUSED = /not available|invalid|unknown|not supported|unsupported|no such|cannot|can't|failed|error/i
@@ -35,14 +38,79 @@ const seen = atom({ plugin: 'employee-control-panel', key: 'seen' } as const, {}
 const AUTO: SubPicks = { model: '', effort: '' }
 const sub = atom({ plugin: 'employee-control-panel', key: 'sub' } as const, AUTO, { shape: 'sub-1' })
 
+/** The video's palette: orange accent, pink effort, green for what is live. */
 const C = {
+  orange: '#EE6A3C',
+  pink: '#C2569B',
   blue: '#58A6FF',
-  blueBright: '#A5D6FF',
+  violet: '#A371F7',
   ink: '#0D1117',
   sheet: '#161B22',
+  chip: '#30363D',
+  rule: '#3D444D',
+  text: '#E6EDF3',
+  white: '#FFFFFF',
+  muted: '#7D8590',
   green: '#3FB950',
   amber: '#E3B341',
   red: '#F85149',
+}
+
+/** `Control Tools` → `C O N T R O L   T O O L S`, as the video's headings. */
+function spaced(text: string): string {
+  return text
+    .toUpperCase()
+    .split(' ')
+    .map(word => word.split('').join(' '))
+    .join('   ')
+}
+
+/** A model family's tab label, with the live version for the one in use. */
+function labelOf(alias: Alias, live: string): string {
+  if (familyOf(live) === alias) return prettyModel(live)
+  const m = MODELS.find(x => x.alias === alias)
+
+  return m ? `${m.label} ${m.version}` : cap(alias)
+}
+
+function effortColor(level: string): string {
+  switch (level) {
+    case 'low':
+      return C.muted
+    case 'medium':
+      return C.blue
+    case 'high':
+      return C.amber
+    case 'xhigh':
+      return C.red
+    case 'max':
+      return C.violet
+    default:
+      return C.text
+  }
+}
+
+function pctColor(pct: number): string {
+  return pct >= 90 ? C.red : pct >= 70 ? C.amber : C.green
+}
+
+/** A 10-cell meter: ▰ used, ▱ free. */
+function meter(pct: number): string {
+  const used = Math.max(0, Math.min(10, Math.round(pct / 10)))
+
+  return '▰'.repeat(used) + '▱'.repeat(10 - used)
+}
+
+/** Subscription or API, from how the session signs in (once per load). */
+let planCache: string | undefined
+async function planOf($: E$, rateLimitCount: number): Promise<string> {
+  if (planCache === undefined) {
+    const who = await $.session.identity().catch(() => undefined)
+    const kind = who && !who.deny ? who.kind : ''
+    planCache = kind === 'claude.ai' ? 'Subscription' : kind === 'console' || kind === 'api-key' ? 'API' : ''
+  }
+  // A five-hour window exists only on a subscription.
+  return planCache || (rateLimitCount > 0 ? 'Subscription' : '')
 }
 
 // ---------------------------------------------------------------------------
@@ -203,7 +271,7 @@ async function closePanel($: E$): Promise<void> {
 /** The one status line for the main session. */
 function mainStatus(model: string, effort: string, picks: MainPicks, busy: boolean): { icon: string; color: string; text: string } {
   const p = [picks.model, picks.effort]
-  const modelPart = picks.model?.state === 'pending' ? cap(picks.model.value) : prettyModel(model)
+  const modelPart = picks.model?.state === 'pending' ? labelOf(picks.model.value as Alias, model) : prettyModel(model)
   const effortPart = picks.effort?.state === 'pending' ? picks.effort.value : effort || 'default'
   const head = `Main: ${modelPart} · effort ${effortPart}`
   const failed = p.find(x => x?.state === 'error')
@@ -276,10 +344,8 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
-    if (!(e as { agentId?: string }).agentId) {
-      await update($, isBusy, () => false)
-      await redraw($)
-    }
+    if (!(e as { agentId?: string }).agentId) await update($, isBusy, () => false)
+    await redraw($)
 
     return r
   })
@@ -288,9 +354,10 @@ export const register: Register = on => {
   // session) or a resumed one (whose model is fixed).
   on('agent.spawn', async ($, e, next) => {
     const s = await read($, sub)
-    if (!s.model || e.subagentType === 'fork' || e.resume) return next(e)
+    const r = !s.model || e.subagentType === 'fork' || e.resume ? await next(e) : await next({ ...e, model: s.model })
+    await redraw($)
 
-    return next({ ...e, model: s.model })
+    return r
   }).catch(($, e, next) => next(e))
 
   // Subagent effort: set on each Agent call but a fork's.
@@ -308,7 +375,16 @@ export const register: Register = on => {
     return done
   }).catch(($, e, next) => next(e))
 
-  // The status-bar button, with what is in force.
+  // Live figures: a measurement after each turn or rate-limit move, and an
+  // agent starting, redraw the bar.
+  on('session.measure', async ($, e, next) => {
+    const r = await next(e)
+    await redraw($)
+
+    return r
+  }).catch(($, e, next) => next(e))
+
+  // The footer row: the live session bar, then the Control Tools button.
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
     const { Box, Button, Text } = $.ui.resolve(e)
     const below = await next(e)
@@ -317,31 +393,83 @@ export const register: Register = on => {
     const picks = await read($, main)
     const s = await read($, sub)
     const model = await modelNow($)
-    const fam = picks.model?.state === 'pending' ? cap(picks.model.value) : cap(familyOf(model)) || prettyModel(model)
     const effort = picks.effort?.state === 'pending' ? picks.effort.value : await effortNow($, model)
+    const modelPending = picks.model?.state === 'pending'
+    const modelText = modelPending ? `${labelOf(picks.model!.value as Alias, model)} …` : prettyModel(model)
+    const usage = await $.session.usage().catch(() => undefined)
+    const ctx = usage?.context.percent
+    const fiveHour = usage?.rateLimits.find(r => r.kind === 'five_hour')?.percentUsed
+    const plan = await planOf($, usage?.rateLimits.length ?? 0)
+    const agents = (await $.agent.list().catch(() => [])).filter(a => a.status === 'running').length
     const subText = subLabel(s)
-    const label = `» Control Tools · ${fam}${effort ? ` · ${effort}` : ''}${subText ? ` · sub: ${subText}` : ''}`
-    const fill = open ? C.blueBright : C.blue
     const modes = e.props.modes
+    const sep = (key: string) => (
+      <Text key={key} color={C.rule}>
+        {'  │  '}
+      </Text>
+    )
 
     return (
       <Box flexDirection="row">
         {below ?? (modes.length > 0 ? <Text dimColor>{modes.join(' & ')}</Text> : null)}
-        <Text>{'  '}</Text>
+        {below || modes.length > 0 ? <Text>{'   '}</Text> : null}
+        {plan ? (
+          <Text key="seg-plan" color={C.green}>
+            {`◆ ${plan}`}
+          </Text>
+        ) : null}
+        {plan ? sep('sep-plan') : null}
+        <Text key="seg-model" color={modelPending ? C.amber : C.text} bold>
+          <Text color={C.blue}>{'◆ '}</Text>
+          {modelText}
+        </Text>
+        {sep('sep-model')}
+        <Text key="seg-effort" dimColor={false}>
+          <Text color={C.muted}>{'effort '}</Text>
+          <Text color={effortColor(effort)} bold>
+            {effort || 'default'}
+          </Text>
+        </Text>
+        {ctx !== undefined ? sep('sep-effort') : null}
+        {ctx !== undefined ? (
+          <Text key="seg-ctx">
+            <Text color={C.muted}>{'ctx '}</Text>
+            <Text color={C.green}>{meter(ctx)}</Text>
+            <Text color={pctColor(ctx)} bold>{` ${Math.round(ctx)}%`}</Text>
+          </Text>
+        ) : null}
+        {fiveHour !== undefined ? sep('sep-ctx') : null}
+        {fiveHour !== undefined ? (
+          <Text key="seg-5h">
+            <Text color={C.muted}>{'5h '}</Text>
+            <Text color={pctColor(fiveHour)} bold>{`${Math.round(fiveHour)}%`}</Text>
+          </Text>
+        ) : null}
+        {sep('sep-agents')}
+        <Text key="seg-agents" color={agents > 0 ? C.blue : C.muted}>
+          {`${agents > 0 ? '◆' : '◇'} ${agents} agent${agents === 1 ? '' : 's'}`}
+        </Text>
+        {subText ? sep('sep-sub') : null}
+        {subText ? (
+          <Text key="seg-sub" color={C.muted}>
+            {`sub `}
+            <Text color={C.text}>{subText}</Text>
+          </Text>
+        ) : null}
+        <Text>{'   '}</Text>
         <Button
           key="open-controls"
           plain
+          label={open ? 'Close Control Tools' : 'Open Control Tools'}
           onPress={async () => {
             // Opened within the press, so it counts as asked for.
             if (await read($, isOpen)) await closePanel($)
             else await openPanel($)
           }}
         >
-          <Text color={fill}>▐</Text>
-          <Text backgroundColor={fill} color={C.ink} bold>
-            {label}
+          <Text backgroundColor={open ? C.orange : C.chip} color={open ? C.white : C.orange} bold>
+            {` ◆ Control Tools ${open ? '∨' : '∧'} `}
           </Text>
-          <Text color={fill}>▌</Text>
         </Button>
       </Box>
     )
@@ -359,63 +487,73 @@ export const register: Register = on => {
     const pickedModel = picks.model && picks.model.state !== 'error' ? picks.model.value : familyOf(model)
     const pickedEffort = picks.effort && picks.effort.state !== 'error' ? picks.effort.value : effort
     const status = mainStatus(model, effort, picks, busy)
+    const nowText = `${pickedModel ? labelOf(pickedModel as Alias, model) : prettyModel(model)} · ${cap(pickedEffort) || 'Default'}`
 
-    const chip = (key: string, label: string, isOn: boolean, onPress: () => unknown) => (
-      <Button key={key} label={label} variant={isOn ? 'primary' : 'secondary'} onPress={onPress} />
-    )
-    const row = (head: string, name: string, chips: ReturnType<typeof chip>[]) => (
-      <Box key={`row-${head}-${name}`} flexDirection="row" flexWrap="wrap" gap={1}>
-        <Text bold color={C.blue}>
-          {head.padEnd(10)}
+    /** One option in a tab row: plain text, highlighted when picked. */
+    const tab = (key: string, label: string, isOn: boolean, onColor: string, onPress: () => unknown) => (
+      <Button key={key} plain label={label} onPress={onPress}>
+        <Text backgroundColor={isOn ? onColor : undefined} color={isOn ? C.white : C.text} bold={isOn}>
+          {` ${label} `}
         </Text>
-        <Text dimColor>{name.padEnd(7)}</Text>
-        {chips}
+      </Button>
+    )
+    const row = (name: string, tabs: ReturnType<typeof tab>[]) => (
+      <Box key={`row-${name}`} flexDirection="row" flexWrap="wrap">
+        <Text color={C.muted}>{name.padEnd(9)}</Text>
+        {tabs}
       </Box>
     )
+    const section = (title: string) => (
+      <Box key={`sec-${title}`} flexDirection="row" marginTop={1}>
+        <Text color={C.rule}>{'── '}</Text>
+        <Text color={C.muted} bold>
+          {spaced(title)}
+        </Text>
+      </Box>
+    )
+    const modelTabs = (prefix: string, picked: string, onPick: (alias: string) => unknown) =>
+      MODELS.map(m => tab(`${prefix}#${m.alias}`, labelOf(m.alias, model), picked === m.alias, C.orange, () => onPick(m.alias)))
+    const effortTabs = (prefix: string, picked: string, onPick: (level: string) => unknown) =>
+      LEVELS.map(l => tab(`${prefix}#${l}`, LEVEL_LABEL[l], picked === l, C.pink, () => onPick(l)))
 
     return (
       <Box flexDirection="column">
         <Box flexDirection="row" justifyContent="space-between">
-          <Text bold color={C.blue}>
-            {'» Control Tools'}
+          <Text color={C.orange} bold>
+            {`◆ ${spaced('Control Tools')}`}
           </Text>
-          <Text dimColor>Esc closes</Text>
+          <Text color={C.muted}>{nowText}</Text>
         </Box>
         <Box flexDirection="column" marginTop={1}>
-          {row(
-            'MAIN',
-            'Model',
-            MODELS.map(m => chip(`main-model#${m.alias}`, m.label, pickedModel === m.alias, () => pickMain($, 'model', m.alias))),
-          )}
-          {row(
-            '',
-            'Effort',
-            LEVELS.map(l => chip(`main-effort#${l}`, l, pickedEffort === l, () => pickMain($, 'effort', l))),
-          )}
+          {row('MODEL', modelTabs('main-model', pickedModel, alias => pickMain($, 'model', alias)))}
+          {row('EFFORT', effortTabs('main-effort', pickedEffort, level => pickMain($, 'effort', level)))}
         </Box>
+        {section('Subagents')}
         <Box flexDirection="column" marginTop={1}>
-          {row('SUBAGENTS', 'Model', [
-            chip('sub-model#', 'Auto', s.model === '', () => pickSub($, 'model', '')),
-            ...MODELS.map(m => chip(`sub-model#${m.alias}`, m.label, s.model === m.alias, () => pickSub($, 'model', m.alias))),
+          {row('MODEL', [
+            tab('sub-model#', 'Auto', s.model === '', C.orange, () => pickSub($, 'model', '')),
+            ...modelTabs('sub-model', s.model, alias => pickSub($, 'model', alias)),
           ])}
-          {row('', 'Effort', [
-            chip('sub-effort#', 'Auto', s.effort === '', () => pickSub($, 'effort', '')),
-            ...LEVELS.map(l => chip(`sub-effort#${l}`, l, s.effort === l, () => pickSub($, 'effort', l))),
+          {row('EFFORT', [
+            tab('sub-effort#', 'Auto', s.effort === '', C.pink, () => pickSub($, 'effort', '')),
+            ...effortTabs('sub-effort', s.effort, level => pickSub($, 'effort', level)),
           ])}
         </Box>
+        {section('Status')}
         <Box flexDirection="column" marginTop={1}>
           <Text color={status.color} wrap="truncate-end">
             {`${status.icon} ${status.text}`}
           </Text>
           <Text color={C.green} wrap="truncate-end">
-            {`● Subagents (this project): ${s.model ? cap(s.model) : 'Auto'} · effort ${s.effort || 'Auto'}`}
+            {`● Subagents (this project): ${s.model ? labelOf(s.model as Alias, model) : 'Auto'} · effort ${s.effort || 'Auto'}`}
           </Text>
-          <Text dimColor wrap="truncate-end">
+          <Text color={C.muted} wrap="truncate-end">
             Forks always run as the main session.
           </Text>
         </Box>
-        <Box flexDirection="row" marginTop={1}>
+        <Box flexDirection="row" justifyContent="space-between" marginTop={1}>
           <Button key="close" label="Close" onPress={() => closePanel($)} />
+          <Text color={C.muted}>Esc closes</Text>
         </Box>
       </Box>
     )
