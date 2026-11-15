@@ -33,6 +33,7 @@ import {
 } from './lib'
 import type { ToolUse } from './lib'
 import { statusGrid } from './status-grid'
+import { offCommand, offPane, switchedHidden, switchedOff, watchSwitch } from './switch'
 
 type E$ = EngineInterface
 
@@ -633,6 +634,7 @@ async function drawPane($: E$, els: Els, w: number): Promise<any> {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    await watchSwitch($, 'work-report', 'Work Report')
     await $.command.register({
       name: 'report',
       description: 'Show what Claude finished for you, with estimated hours saved',
@@ -644,6 +646,8 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'report' }, async ($, e) => {
+
+    if (switchedOff()) return offCommand() /* switch-guarded */
     const words = e.args.trim().toLowerCase().split(/\s+/).filter(Boolean)
     const [first] = words
     if (first === 'settings') return { text: await runSettings($, words.slice(1)) }
@@ -655,12 +659,16 @@ export const register: Register = on => {
   }).catch(() => ({ text: FAIL_LINE }))
 
   on('prompt.submit', async ($, e, next) => {
+
+    if (switchedOff()) return next(e) /* switch-guarded */
     const result = await next(e)
     if (result.drop === undefined && isTypedPrompt(e)) armed = true
     return result
   }).catch(($, e, next) => next(e))
 
   on('turn.start', async ($, e, next) => {
+
+    if (switchedOff()) return next(e) /* switch-guarded */
     if (e.agentId === undefined) {
       live = armed ? { turnId: e.turnId, uses: [] } : null
       armed = false
@@ -669,11 +677,15 @@ export const register: Register = on => {
   })
 
   on('tool.call', async ($, e, next) => {
+
+    if (switchedOff()) return next(e) /* switch-guarded */
     if (live) live.uses.push(toolUseOf(e as unknown as { tool: string } & Record<string, unknown>))
     return next(e)
   }).catch(($, e, next) => next(e))
 
   on('turn.complete', async ($, e, next) => {
+
+    if (switchedOff()) return next(e) /* switch-guarded */
     const result = await next(e)
     if (e.agentId === undefined && live && live.turnId === e.turnId) {
       const task = live
@@ -687,6 +699,7 @@ export const register: Register = on => {
 
   // The status bar button: the footer's mode labels, then "Work report".
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+    if (switchedOff() || switchedHidden()) return next(e) /* switch-guarded */
     const { Box, Text, Button } = $.ui.resolve(e) as unknown as Els
     // Draw beside what is already there (the engine's labels, other mods' buttons), never over it.
     const below = await next(e)
@@ -713,6 +726,8 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+
+    if (switchedOff()) return offPane($, e) /* switch-guarded */
     const els = $.ui.resolve(e) as unknown as Els
     const w = Math.max(20, e.props.bodyColumns)
     return drawPane($, els, w)

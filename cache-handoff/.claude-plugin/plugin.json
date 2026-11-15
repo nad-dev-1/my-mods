@@ -1,6 +1,6 @@
 {
   "name": "cache-handoff",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "A Cache Clock card above the prompt (the hour the prompt cache stays warm, an always-visible Auto-warm switch with invisible pings, dollar estimates, a cold-send guard) and a Handoff: a Refresh banner past 250k or on a cold cache, a five-step progress card, and a ready card that starts a new chat from the saved handoff",
   "author": {
     "name": "nad-dev-1"

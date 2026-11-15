@@ -25,7 +25,7 @@
     {
       "name": "mod-manager",
       "source": "./mod-manager",
-      "description": "List every installed plugin/mod with its status and turn each one on or off, from /mods or a panel"
+      "description": "A Mods side pane (also the ≡ Mods status-bar button and /mods): every installed mod with its icon, description and command, an On/Off switch that reaches every chat within 3 seconds for your own mods, an eye to hide a mod while it keeps working, Open for pane mods, and new mods appearing by themselves"
     },
     {
       "name": "cache-handoff",

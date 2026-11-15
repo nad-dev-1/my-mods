@@ -3,6 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { ReplayTarget } from '../types'
 import { statusGrid } from './status-grid'
+import { switchedHidden, switchedOff, watchSwitch } from './switch'
 
 // A status-bar button that opens Replay Theater. The pane, the diffs and the
 // stepping all stay Replay Theater's: this mod only counts the edits, so the
@@ -55,6 +56,7 @@ async function openReplay($: EngineInterface): Promise<void> {
 export const register: Register = on => {
   // Counts reset with each load, as Replay Theater's own memory does.
   on('session.start', async ($, e, next) => {
+    await watchSwitch($, 'replay-button', 'Replay button')
     const r = await next(e)
     await update($, edits, () => 0)
     await update($, pending, () => 0)
@@ -64,6 +66,7 @@ export const register: Register = on => {
 
   // Count each edit; never touch the call.
   on('tool.call', async ($, e, next) => {
+    if (switchedOff()) return next(e) /* switch-guarded */
     if (EDIT_TOOLS.has(e.tool)) {
       // MultiEdit (on builds that have it) is one Replay step per edit.
       const list: unknown = (e as unknown as { edits?: unknown }).edits
@@ -75,6 +78,8 @@ export const register: Register = on => {
   })
 
   on('turn.start', async ($, e, next) => {
+
+    if (switchedOff()) return next(e) /* switch-guarded */
     if (!e.agentId) await update($, pending, () => 0)
 
     return next(e)
@@ -83,6 +88,7 @@ export const register: Register = on => {
   // Like Replay Theater: a main turn with edits replaces the replay; a turn
   // without edits keeps the last one.
   on('turn.complete', async ($, e, next) => {
+    if (switchedOff()) return next(e) /* switch-guarded */
     const r = await next(e)
     if (e.agentId) return r
     const count = await read($, pending)
@@ -95,6 +101,8 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+
+    if (switchedOff() || switchedHidden()) return next(e) /* switch-guarded */
     const { Box, Button, Text } = $.ui.resolve(e)
     const below = await next(e)
     const count = await read($, edits)

@@ -3,6 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { AddForm, FillStep, InjectView, SavedPrompt, Stash } from '../types'
 import { statusGrid } from './status-grid'
+import { offCommand, offPane, switchedHidden, switchedOff, watchSwitch } from './switch'
 
 // Inject Prompt: a status-bar button opens a dialog of saved prompts, grouped
 // by category, filtered by category, tag or search. Tick one or more, press
@@ -664,6 +665,7 @@ function fit(text: string, width: number): string {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    await watchSwitch($, 'inject-prompt', 'Inject Prompt')
     const r = await next(e)
     await $.command.register({ name: 'inject', description: 'Pick saved prompts and insert them at the cursor' })
     // A reload while open: the pane is gone, so is the flag; the draft it
@@ -675,6 +677,8 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'inject' }, async $ => {
+
+    if (switchedOff()) return offCommand() /* switch-guarded */
     await openDialog($)
 
     return { text: 'Opening your saved prompts.' }
@@ -740,6 +744,7 @@ export const register: Register = on => {
 
   // The status-bar button.
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+    if (switchedOff() || switchedHidden()) return next(e) /* switch-guarded */
     const { Box, Button, Text } = $.ui.resolve(e)
     const below = await next(e)
     const open = await read($, isOpen)
@@ -771,6 +776,7 @@ export const register: Register = on => {
 
   // The dialog.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    if (switchedOff()) return offPane($, e) /* switch-guarded */
     const elements = $.ui.resolve(e)
     const { Box, Button, Text } = elements
     const Input = 'Input' in elements ? elements.Input : undefined

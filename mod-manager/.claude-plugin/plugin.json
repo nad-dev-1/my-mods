@@ -1,6 +1,6 @@
 {
   "name": "mod-manager",
-  "version": "0.2.3",
-  "description": "A ≡ Mods button in the status bar opens a sheet listing every installed plugin/mod with an on/off switch; also /mods",
+  "version": "0.3.0",
+  "description": "A Mods side pane (also the ≡ Mods status-bar button and /mods): every installed mod with its icon, description and command, an On/Off switch that reaches every chat within 3 seconds for your own mods, an eye to hide a mod while it keeps working, Open for pane mods, and new mods appearing by themselves",
   "types": "./types/index.d.ts"
 }

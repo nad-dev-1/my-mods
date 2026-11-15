@@ -2,6 +2,7 @@ import type { EngineInterface, ModelCompleteResult, PaneOpenArgs, PromptSubmitIn
 
 import type { Answer, Flow, FlowSource, HistoryEntry, Notice, Question } from '../types'
 import { statusGrid } from './status-grid'
+import { offCommand, offPane, switchedHidden, switchedOff, watchSwitch } from './switch'
 
 type E$ = EngineInterface
 
@@ -1103,6 +1104,7 @@ async function upgradeFromButton($: E$): Promise<void> {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    await watchSwitch($, 'prompt-upgrade', 'Prompt Upgrade')
     await $.command.register({
       name: 'better',
       description: 'Upgrade a rough prompt before sending it (on, off, history)',
@@ -1115,6 +1117,8 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'better' }, async ($, e) => {
+
+    if (switchedOff()) return offCommand() /* switch-guarded */
     const arg = e.args.trim()
     const word = arg.toLowerCase()
     if (word === 'on' || word === 'off') {
@@ -1147,6 +1151,8 @@ export const register: Register = on => {
   }).catch(() => ({ text: FAIL_LINE }))
 
   on('prompt.submit', async ($, e, next) => {
+
+    if (switchedOff()) return next(e) /* switch-guarded */
     if (!(await isAuto($))) return next(e)
     const d = decide(e)
     if (d.kind === 'pass') return next(e)
@@ -1167,6 +1173,7 @@ export const register: Register = on => {
 
   // The Upgrade button in the status bar, beside the other mods' buttons.
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+    if (switchedOff() || switchedHidden()) return next(e) /* switch-guarded */
     const { Box, Button, Text } = $.ui.resolve(e)
     const below = await next(e)
     const { flow } = await readFlow($)
@@ -1207,6 +1214,8 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+
+    if (switchedOff()) return offPane($, e) /* switch-guarded */
     const els = $.ui.resolve(e) as unknown as Els
     const { Box } = els
     const w = Math.max(20, e.props.bodyColumns)

@@ -1,348 +1,309 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
+
+import { factsOf, hintOf, withHidden, withOff } from '../hooks/mods-logic'
 
 const PANE = {
   plugin: 'mod-manager',
   component: 'Pane',
   requestId: 'mod-manager',
-  props: {
-    title: 'Mods',
-    isFocused: true,
-    bodyColumns: 80,
-    placement: 'dock',
-    scroll: { offset: 0, bodyRows: 40 },
-    view: {},
-  },
+  props: { title: 'Mods', isFocused: true, bodyColumns: 72, placement: 'dock', scroll: { offset: 0, bodyRows: 80 }, view: {} },
 } as const
+const STATUS_BAR = { plugin: 'mod-manager', component: 'SessionMode', props: { modes: [] } } as const
 
-const CWD = '/work/app'
+const HOME = '/Users/tester'
+const SWITCH_FILE = `${HOME}/.claude/mods/switches.json`
 
-function fakeCli(
-  on: any,
-  calls: string[][],
-  opens: any[] = [],
-  extra: Record<string, boolean> = {},
-) {
-  const enabled: Record<string, boolean> = {
-    'alpha@market': true,
-    'beta@market': false,
-    ...extra,
+/** Installed plugins: three of yours, one other mod, and a skills pack (not a mod). */
+const PLUGINS: Record<string, { source: string; description: string; isMod?: boolean }> = {
+  'chat-inventory@my-mods': {
+    description: 'A side pane, In this chat, with live cards. More words.',
+    source: "await watchSwitch($, 'chat-inventory', 'Chat Inventory')\n$.command.register({ name: 'inventory' })\non('ui.render', { component: 'SessionMode' })\non('ui.render', { component: 'Pane' })",
+  },
+  'cache-handoff@my-mods': {
+    description: 'A Cache Clock card above the prompt. Other things.',
+    source: "await watchSwitch($, 'cache-handoff', 'x')\nawait $.command\n      .register({ name: 'handoff-new', description: '' })\non('ui.render', { component: 'AbovePrompt' })",
+  },
+  'mod-manager@my-mods': {
+    description: 'A Mods button.',
+    source: "$.command.register({ name: 'mods' })\non('ui.render', { component: 'Pane' })\non('ui.render', { component: 'SessionMode' })",
+  },
+  'reflect-mod@claude-reflect-marketplace': {
+    description: 'Turns your corrections into CLAUDE.md rules. And more.',
+    source: "on('ui.render', { component: 'AbovePrompt' })",
+  },
+  'superpowers@claude-plugins-official': { description: 'Skills.', source: '', isMod: false },
+}
+
+type World = {
+  clock: ReturnType<typeof mock.clock>
+  enabled: Record<string, boolean>
+  files: Record<string, string>
+  cli: string[][]
+  commands: { command: string; args?: string }[]
+  opens: string[]
+  closes: string[]
+}
+
+function world(on: any, extra: Record<string, { source: string; description: string }> = {}): World {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  mock.store(on, {})
+  const all = { ...PLUGINS, ...extra }
+  const w: Omit<World, 'clock'> = {
+    enabled: Object.fromEntries(Object.keys(all).map(id => [id, true])),
+    files: {},
+    cli: [],
+    commands: [],
+    opens: [],
+    closes: [],
   }
+  const folderOf = (id: string) => `/inst/${id.split('@')[0]}`
+  for (const [id, p] of Object.entries(all)) {
+    const f = folderOf(id)
+    w.files[`${f}/.claude-plugin/plugin.json`] = JSON.stringify({ name: id.split('@')[0], description: p.description })
+    w.files[`${f}/hooks/hooks.json`] = (p as { isMod?: boolean }).isMod === false ? '{"hooks":{}}' : '{ "modules": ["./register.tsx"] }'
+    w.files[`${f}/hooks/register.tsx`] = p.source
+  }
+  on('env.get', () => ({ value: HOME }))
+  on('command.register', () => ({ value: undefined }))
+  on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('process.run', (_: unknown, e: any) => {
     const argv: string[] = e.argv
-    calls.push(argv)
+    w.cli.push(argv)
     const [, , verb, id] = argv
+    const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
     if (verb === 'list') {
-      const list: object[] = Object.entries(enabled).map(([key, isOn]) => ({
-        id: key,
-        scope: 'user',
-        version: '1.0.0',
-        enabled: isOn,
-        installPath: `/inst/${key.split('@')[0]}`,
-      }))
-      // Installed for another project, twice: never shown here.
-      const elsewhere = {
-        id: 'gamma@market',
-        scope: 'local',
-        version: '1.0.0',
-        enabled: false,
-        projectPath: '/work/other',
-      }
-      list.push(elsewhere, elsewhere)
-      // Installed for this project: shown once.
-      const here = { ...elsewhere, id: 'delta@market', projectPath: CWD }
-      list.push(here, here)
-
-      return { value: { exitCode: 0, stdout: JSON.stringify(list), stderr: '' } }
+      return ok(JSON.stringify(Object.keys({ ...PLUGINS, ...extra }).map(key => ({ id: key, scope: 'user', version: '1.0.0', enabled: w.enabled[key], installPath: folderOf(key) }))))
     }
     if ((verb === 'enable' || verb === 'disable') && id) {
-      enabled[id] = verb === 'enable'
-
-      return { value: { exitCode: 0, stdout: '', stderr: '' } }
+      w.enabled[id] = verb === 'enable'
+      return ok()
     }
-
-    return { value: { exitCode: 1, stdout: '', stderr: 'unknown' } }
+    return { value: { exitCode: 1, stdout: '', stderr: 'unknown', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('fs.read', (_: unknown, e: any) => {
-    const m = /^\/inst\/([a-z]+)\/\.claude-plugin\/plugin\.json$/.exec(e.path)
-    if (!m) throw new Error('missing')
-
-    return { value: JSON.stringify({ name: m[1], description: `The ${m[1]} mod, which does a useful thing. More words after.` }) }
+    if (!(e.path in w.files)) throw new Error(`ENOENT ${e.path}`)
+    return { value: w.files[e.path] }
   })
-  on('command.register', () => ({ value: { command: 'mods' } }))
-  on('ui.open', (_: unknown, e: any) => {
-    opens.push(e)
-
-    return { value: { isPlaced: true } }
-  })
-  on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
-}
-
-async function start($: any) {
-  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
-}
-
-test('/mods list prints the mods that apply here, once each', async ($, on) => {
-  fakeCli(on, [])
-  await start($)
-
-  const { text } = await $.command.run({ command: 'mods', args: 'list' })
-
-  expect(text).toContain('1 of 3 mods enabled')
-  expect(text).toContain('[ON ] alpha@market')
-  expect(text).toContain('[off] beta@market')
-  expect(text).toContain('[off] delta@market v1.0.0 (local)')
-  expect(text).not.toContain('gamma')
-  expect(text!.split('delta@market').length).toBe(2)
-})
-
-test('/mods opens the panel and says how to use it', async ($, on) => {
-  fakeCli(on, [])
-  await start($)
-
-  const { text } = await $.command.run({ command: 'mods' })
-
-  expect(text).toContain('1 of 3 mods on')
-  expect(text).toContain('Enter toggles')
-})
-
-test('/mods disable <short name> runs the CLI and reports it', async ($, on) => {
-  const calls: string[][] = []
-  fakeCli(on, calls)
-  await start($)
-
-  const { text } = await $.command.run({ command: 'mods', args: 'disable alpha' })
-
-  expect(text).toContain('Disabled alpha@market')
-  expect(calls).toContainEqual([
-    'claude', 'plugin', 'disable', 'alpha@market', '--scope', 'user',
-  ])
-  const status = await $.command.run({ command: 'mods', args: 'status alpha' })
-  expect(status.text).toContain('[off] alpha@market')
-})
-
-test('/mods status on an unknown name says so', async ($, on) => {
-  fakeCli(on, [])
-  await start($)
-
-  const { text } = await $.command.run({ command: 'mods', args: 'status nope' })
-
-  expect(text).toContain('No installed mod named "nope"')
-})
-
-test('a row in the panel is a switch: a press turns the mod on', async ($, on) => {
-  const calls: string[][] = []
-  fakeCli(on, calls)
-  await start($)
-  await $.command.run({ command: 'mods' })
-
-  for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
-    const ui = await $.ui.mount({ ...PANE, surface })
-    expect(await ui.find({ type: 'Button', key: 'beta@market#user' })).toBeTruthy()
-    await ui.unmount()
-  }
-
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /^ ○ Off $/ })).toBeTruthy()
-  await ui.press({ key: 'beta@market#user' })
-
-  expect(calls).toContainEqual([
-    'claude', 'plugin', 'enable', 'beta@market', '--scope', 'user',
-  ])
-  expect(await ui.find({ type: 'Text', text: /^2 on$/ })).toBeTruthy()
-  expect(await ui.find({ type: 'Button', key: 'apply' })).toBeTruthy()
-  await ui.unmount()
-})
-
-test('the Off filter hides the mods that are on', async ($, on) => {
-  fakeCli(on, [])
-  await start($)
-  await $.command.run({ command: 'mods' })
-
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  await ui.press({ key: 'filter-off' })
-
-  expect(await ui.find({ type: 'Button', key: 'alpha@market#user' })).toBeFalsy()
-  expect(await ui.find({ type: 'Button', key: 'beta@market#user' })).toBeTruthy()
-  await ui.unmount()
-})
-
-test('j moves the cursor down and t toggles the highlighted mod', async ($, on) => {
-  const calls: string[][] = []
-  fakeCli(on, calls)
-  await start($)
-  await $.command.run({ command: 'mods' })
-
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  // Sorted: alpha, beta, delta. The cursor starts on alpha.
-  expect(await ui.find({ type: 'Text', text: /▶/ })).toBeTruthy()
-
-  await ui.press({ key: 'down' })
-  await ui.press({ key: 'toggle' })
-
-  expect(calls).toContainEqual([
-    'claude', 'plugin', 'enable', 'beta@market', '--scope', 'user',
-  ])
-  expect(calls.some(c => c[2] === 'disable')).toBe(false)
-
-  await ui.press({ key: 'up' })
-  await ui.press({ key: 'toggle' })
-  expect(calls).toContainEqual([
-    'claude', 'plugin', 'disable', 'alpha@market', '--scope', 'user',
-  ])
-  await ui.unmount()
-})
-
-const STATUS_BAR = {
-  plugin: 'mod-manager',
-  component: 'SessionMode',
-  props: { modes: [] },
-} as const
-
-test('the status-bar Mods button shows the count and opens the sheet', async ($, on) => {
-  const opens: any[] = []
-  fakeCli(on, [], opens)
-  await start($)
-  await $.command.run({ command: 'mods', args: 'list' })
-
-  const bar = await $.ui.mount({ ...STATUS_BAR, surface: 'terminal' })
-  expect(await bar.find({ type: 'Text', text: /≡ Mods 1\/3/ })).toBeTruthy()
-
-  await bar.press({ key: 'open-mod-manager' })
-  expect(opens.some(o => o.id === 'mod-manager' && o.focus === true && o.closeOnEscape === true)).toBe(true)
-  await bar.unmount()
-})
-
-test('a second press on the Mods button closes the sheet', async ($, on) => {
-  const closes: any[] = []
-  fakeCli(on, [])
-  on('ui.close', (_: unknown, e: any) => {
-    closes.push(e)
-
+  on('fs.write', (_: unknown, e: any) => {
+    w.files[e.path] = e.text
     return { value: undefined }
   })
-  await start($)
-
-  const bar = await $.ui.mount({ ...STATUS_BAR, surface: 'terminal' })
-  await bar.press({ key: 'open-mod-manager' })
-  await bar.press({ key: 'open-mod-manager' })
-
-  expect(closes.some(c => c.id === 'mod-manager')).toBe(true)
-  await bar.unmount()
-})
-
-test('each sheet row ends in a switch that reads On or Off', async ($, on) => {
-  fakeCli(on, [])
-  await start($)
-  await $.command.run({ command: 'mods' })
-
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /^ ● On {2}$/ })).toBeTruthy()
-  expect(await ui.find({ type: 'Text', text: /^ ○ Off $/ })).toBeTruthy()
-  await ui.unmount()
-})
-
-test('the sheet groups mods: My mods, Official, Community', async ($, on) => {
-  fakeCli(on, [], [], {
-    'mine@my-mods': true,
-    'kit@claude-plugins-official': false,
+  on('fs.list', (_: unknown, e: any) => {
+    const prefix = `${e.path}/`
+    const names = Object.keys(w.files).filter(p => p.startsWith(prefix) && !p.slice(prefix.length).includes('/')).map(p => p.slice(prefix.length))
+    return { value: names.map(name => ({ name, kind: 'file', size: 1, mtimeMs: 1, isLink: false })) }
   })
-  await start($)
-  await $.command.run({ command: 'mods' })
+  on('command.run', (_: unknown, e: any) => {
+    w.commands.push({ command: e.command, args: e.args })
+    return { text: '' }
+  })
+  on('ui.open', (_: unknown, e: any) => {
+    w.opens.push(e.id)
+    return { value: { isPlaced: true } }
+  })
+  on('ui.close', (_: unknown, e: any) => {
+    w.closes.push(e.id)
+    return { value: undefined }
+  })
+  on('ui.focus', () => ({ value: undefined }))
+  on('ui.scroll', () => ({ value: undefined }))
 
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Button', key: 'group#mine' })).toBeTruthy()
-  expect(await ui.find({ type: 'Button', key: 'group#official' })).toBeTruthy()
-  expect(await ui.find({ type: 'Button', key: 'group#community' })).toBeTruthy()
-  expect(await ui.find({ type: 'Button', key: 'group#synced' })).toBeFalsy()
-  expect(await ui.find({ type: 'Text', text: /My mods/ })).toBeTruthy()
+  return Object.assign(w, { clock }) as World
+}
+
+const start = ($: any) => $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+const mods = ($: any, args = '') => $.command.run({ command: 'mods', args, origin: { kind: 'composer' } })
+const switches = (w: World) => JSON.parse(w.files[SWITCH_FILE] ?? '{}')
+
+async function openPane($: any) {
+  await mods($)
+  return $.ui.mount({ ...PANE, surface: 'terminal' } as any)
+}
+
+const texts = async (ui: any) =>
+  [...(await ui.findAll({ type: 'Text' })), ...(await ui.findAll({ type: 'Button' }))]
+    .map((t: any) => [t.text, t.label, t.props?.label].filter(Boolean).join(' '))
+    .join('\n')
+
+// ── What a mod's source says ────────────────────────────────────────────
+
+test('a mod\'s source tells whether it reads the switch, draws, has a pane, and its command', () => {
+  expect(factsOf(PLUGINS['chat-inventory@my-mods']!.source)).toEqual({ isSwitchable: true, draws: true, hasPane: true, command: 'inventory' })
+  expect(factsOf(PLUGINS['cache-handoff@my-mods']!.source)).toEqual({ isSwitchable: true, draws: true, hasPane: false, command: 'handoff-new' })
+  expect(factsOf(PLUGINS['reflect-mod@claude-reflect-marketplace']!.source).isSwitchable).toBe(false)
+  expect(hintOf({ command: 'inventory', hasPane: true })).toBe('/inventory to open')
+  expect(hintOf({ command: 'handoff-new', hasPane: false })).toBe('/handoff-new to run')
+  expect(withOff({}, 'a', true)).toEqual({ a: false })
+  expect(withOff({ a: false, b: false }, 'a', false)).toEqual({ b: false })
+  expect(withHidden({}, 'a', true)).toEqual({ 'a:hidden': true })
+})
+
+// ── The pane ────────────────────────────────────────────────────────────
+
+test('the pane lists only mods: yours first, then others, each with icon, description and how to reach it', async ($, on) => {
+  const w = world(on)
+  await start($)
+  const ui = await openPane($)
+  expect(w.opens).toEqual(['mod-manager'])
+  const all = await texts(ui)
+  expect(all).toMatch(/Your mods/)
+  expect(all).toMatch(/▤ Chat Inventory/)
+  expect(all).toMatch(/A side pane, In this chat, with live cards$/m)
+  expect(all).toMatch(/\/inventory to open/)
+  expect(all).toMatch(/◷ Cache Clock & Handoff/)
+  expect(all).toMatch(/\/handoff-new to run/)
+  expect(all).toMatch(/Other mods/)
+  expect(all).toMatch(/↻ Reflect/)
+  expect(all).not.toMatch(/Superpowers|superpowers/)
+  expect(all.indexOf('Chat Inventory')).toBeLessThan(all.indexOf('Reflect'))
+  expect(all).toMatch(/Off means off in every chat\. Hidden keeps it on but out of sight\. Changes apply within 3 seconds\. New mods appear here by themselves\./)
   await ui.unmount()
 })
 
-test('pressing a group header folds it, and again unfolds it', async ($, on) => {
-  fakeCli(on, [], [], { 'mine@my-mods': true })
+test('turning one of your mods off writes the switch file at once, with no CLI call, and the footer confirms it', async ($, on) => {
+  const w = world(on)
   await start($)
-  await $.command.run({ command: 'mods' })
-
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Button', key: 'alpha@market#user' })).toBeTruthy()
-
-  await ui.press({ key: 'group#community' })
-  expect(await ui.find({ type: 'Button', key: 'alpha@market#user' })).toBeFalsy()
-  expect(await ui.find({ type: 'Button', key: 'group#community' })).toBeTruthy()
-  // The other group stays open.
-  expect(await ui.find({ type: 'Button', key: 'mine@my-mods#user' })).toBeTruthy()
-
-  await ui.press({ key: 'group#community' })
-  expect(await ui.find({ type: 'Button', key: 'alpha@market#user' })).toBeTruthy()
+  const ui = await openPane($)
+  const before = w.cli.length
+  await ui.press({ key: 'switch:chat-inventory@my-mods' })
+  expect(switches(w)).toEqual({ 'chat-inventory': false })
+  expect(w.cli.slice(before).filter(a => a[2] !== 'list')).toEqual([])
+  const all = await texts(ui)
+  expect(all).toMatch(/Chat Inventory is off in every chat\./)
+  expect(all).toMatch(/○ Off/)
+  expect(await ui.find({ type: 'Button', key: 'apply' })).toBeFalsy()
+  await ui.press({ key: 'switch:chat-inventory@my-mods' })
+  expect(switches(w)).toEqual({})
+  expect(await texts(ui)).toMatch(/Chat Inventory is on in every chat\./)
   await ui.unmount()
 })
 
-test('Fold all hides every mod; Unfold all brings them back', async ($, on) => {
-  fakeCli(on, [], [], { 'mine@my-mods': true })
+test('the eye hides one of your mods in every chat, keeping it on', async ($, on) => {
+  const w = world(on)
   await start($)
-  await $.command.run({ command: 'mods' })
-
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  await ui.press({ key: 'fold-all' })
-  expect(await ui.find({ type: 'Button', key: 'alpha@market#user' })).toBeFalsy()
-  expect(await ui.find({ type: 'Button', key: 'mine@my-mods#user' })).toBeFalsy()
-
-  await ui.press({ key: 'unfold-all' })
-  expect(await ui.find({ type: 'Button', key: 'mine@my-mods#user' })).toBeTruthy()
+  const ui = await openPane($)
+  await ui.press({ key: 'eye:cache-handoff@my-mods' })
+  expect(switches(w)).toEqual({ 'cache-handoff:hidden': true })
+  const all = await texts(ui)
+  expect(all).toMatch(/Cache Clock & Handoff is hidden in every chat\. It keeps working, out of sight\./)
+  expect(all).toMatch(/◌ Hidden/)
+  expect(all).toMatch(/≡ Mods\s+4 on/)
+  await ui.press({ key: 'eye:cache-handoff@my-mods' })
+  expect(switches(w)).toEqual({})
+  // Mods that cannot hide have no eye.
+  expect(await ui.find({ type: 'Button', key: 'eye:reflect-mod@claude-reflect-marketplace' })).toBeFalsy()
   await ui.unmount()
 })
 
-test('every mod is drawn, even past the sheet height, so the list scrolls', async ($, on) => {
-  const many: Record<string, boolean> = {}
-  for (let i = 0; i < 40; i++) many[`m${String(i).padStart(2, '0')}@market`] = i % 2 === 0
-  fakeCli(on, [], [], many)
+test('another mod is really disabled through the CLI and says it applies after a reload, with Apply', async ($, on) => {
+  const w = world(on)
   await start($)
-  await $.command.run({ command: 'mods' })
-
-  const short = { ...PANE, props: { ...PANE.props, scroll: { offset: 0, bodyRows: 8 } } }
-  const ui = await $.ui.mount({ ...short, surface: 'terminal' })
-  expect(await ui.find({ type: 'Button', key: 'm00@market#user' })).toBeTruthy()
-  expect(await ui.find({ type: 'Button', key: 'm39@market#user' })).toBeTruthy()
+  const ui = await openPane($)
+  await ui.press({ key: 'switch:reflect-mod@claude-reflect-marketplace' })
+  expect(w.cli).toContainEqual(['claude', 'plugin', 'disable', 'reflect-mod@claude-reflect-marketplace', '--scope', 'user'])
+  expect(w.files[SWITCH_FILE]).toBeUndefined()
+  const all = await texts(ui)
+  expect(all).toMatch(/applies after reload/)
+  expect(all).toMatch(/Reflect is disabled\. It applies after a reload: press Apply\./)
+  await ui.press({ key: 'apply' })
+  expect(w.commands.map(c => c.command)).toContain('reload-plugins')
+  expect(await ui.find({ type: 'Button', key: 'apply' })).toBeFalsy()
   await ui.unmount()
 })
 
-test('/mods tells the person which keys drive the panel', async ($, on) => {
-  fakeCli(on, [])
+test('a change made in another chat shows within 3 seconds', async ($, on) => {
+  const w = world(on)
   await start($)
-
-  const { text } = await $.command.run({ command: 'mods' })
-
-  expect(text).toContain('j/k')
-  expect(text).toContain('ctrl+x then Tab')
-})
-
-test('rows look like the video: a dot, the name, a short description and an On/Off switch', async ($, on) => {
-  const calls: string[][] = []
-  fakeCli(on, calls)
-  await start($)
-  await $.command.run({ command: 'mods' })
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-
-  // On: a green dot and a filled switch; off: a hollow dot and a plain switch.
-  expect(await ui.find({ type: 'Text', text: /^ ● On  $/ })).toBeTruthy()
-  expect(await ui.find({ type: 'Text', text: /^ ○ Off $/ })).toBeTruthy()
-  const texts = (await ui.findAll({ type: 'Text' })).map((t: any) => t.text ?? '').join('\n')
-  expect(texts).toMatch(/● \nalpha/)
-  expect(texts).toMatch(/○ \nbeta/)
-  // The first sentence of the manifest's description, without the rest.
-  expect(texts).toContain('The alpha mod, which does a useful thing')
-  expect(texts).not.toContain('More words after')
+  const ui = await openPane($)
+  w.files[SWITCH_FILE] = JSON.stringify({ 'chat-inventory': false })
+  await w.clock.advance(3000)
+  expect(await texts(ui)).toMatch(/≡ Mods\s+3 on · 1 off/)
   await ui.unmount()
 })
 
-test('the highlighted row shows its full id, scope and version underneath', async ($, on) => {
-  const calls: string[][] = []
-  fakeCli(on, calls)
+test('a new mod appears by itself while the pane is open', async ($, on) => {
+  const extra: Record<string, { source: string; description: string }> = {}
+  const w = world(on, extra)
   await start($)
-  await $.command.run({ command: 'mods' })
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  await ui.press({ key: 'beta@market#user' })
-
-  expect(await ui.find({ type: 'Text', text: /beta@market · user · v1\.0\.0/ })).toBeTruthy()
+  const ui = await openPane($)
+  expect(await texts(ui)).not.toMatch(/Brand New/)
+  extra['brand-new@my-mods'] = { description: 'Just built.', source: "await watchSwitch($, 'brand-new', 'x')" }
+  w.enabled['brand-new@my-mods'] = true
+  w.files['/inst/brand-new/.claude-plugin/plugin.json'] = JSON.stringify({ description: 'Just built.' })
+  w.files['/inst/brand-new/hooks/hooks.json'] = '{ "modules": ["./register.tsx"] }'
+  w.files['/inst/brand-new/hooks/register.tsx'] = "await watchSwitch($, 'brand-new', 'x')"
+  await w.clock.advance(10_000)
+  expect(await texts(ui)).toMatch(/Brand New/)
   await ui.unmount()
+})
+
+test('Open runs a pane mod\'s command; the Mods row itself has no switch', async ($, on) => {
+  const w = world(on)
+  await start($)
+  const ui = await openPane($)
+  await ui.press({ key: 'open:chat-inventory@my-mods' })
+  expect(w.commands).toContainEqual({ command: 'inventory', args: '' })
+  expect(await ui.find({ type: 'Button', key: 'open:cache-handoff@my-mods' })).toBeFalsy()
+  expect(await ui.find({ type: 'Button', key: 'switch:mod-manager@my-mods' })).toBeFalsy()
+  expect(await texts(ui)).toMatch(/this pane/)
+  await ui.unmount()
+})
+
+test('search and the On/Off filter narrow the list', async ($, on) => {
+  const w = world(on)
+  w.files[SWITCH_FILE] = JSON.stringify({ 'cache-handoff': false })
+  await start($)
+  const ui = await openPane($)
+  await ui.press({ key: 'filter-off' })
+  let all = await texts(ui)
+  expect(all).toMatch(/Cache Clock/)
+  expect(all).not.toMatch(/Chat Inventory/)
+  await ui.press({ key: 'filter-all' })
+  await ui.input({ key: 'search', text: 'reflect' } as any)
+  all = await texts(ui)
+  expect(all).toMatch(/Reflect/)
+  expect(all).not.toMatch(/Chat Inventory/)
+  await ui.unmount()
+})
+
+test('j moves the cursor and t switches the highlighted mod', async ($, on) => {
+  const w = world(on)
+  await start($)
+  const ui = await openPane($)
+  await ui.press({ key: 'down' })
+  await ui.press({ key: 'toggle' })
+  // Your mods A to Z by title: Cache Clock & Handoff, then Chat Inventory.
+  expect(switches(w)).toEqual({ 'chat-inventory': false })
+  await ui.unmount()
+})
+
+test('/mods text commands: list, disable, hide and show', async ($, on) => {
+  const w = world(on)
+  await start($)
+  let r = await mods($, 'disable chat-inventory')
+  expect(r.text).toBe('Chat Inventory is off in every chat.')
+  r = await mods($, 'hide Cache Clock & Handoff')
+  expect(r.text).toMatch(/hidden in every chat/)
+  r = await mods($, 'list')
+  expect(r.text).toMatch(/^3 of 4 mods on:/)
+  expect(r.text).toMatch(/\[off\] Chat Inventory/)
+  expect(r.text).toMatch(/\[ON \] Cache Clock & Handoff \(cache-handoff@my-mods v1\.0\.0, hidden\)/)
+  r = await mods($, 'show cache-handoff')
+  expect(switches(w)).toEqual({ 'chat-inventory': false })
+  r = await mods($, 'status nothing-here')
+  expect(r.text).toMatch(/No installed mod named "nothing-here"/)
+})
+
+test('the status-bar button shows how many are on and opens and closes the pane', async ($, on) => {
+  const w = world(on)
+  w.files[SWITCH_FILE] = JSON.stringify({ 'cache-handoff': false })
+  await start($)
+  await w.clock.advance(1)
+  const bar = await $.ui.mount({ ...STATUS_BAR, surface: 'terminal' } as any)
+  expect(await bar.find({ type: 'Text', text: /≡ Mods 3\/4/ })).toBeTruthy()
+  await bar.press({ key: 'open-mod-manager' })
+  expect(w.opens).toEqual(['mod-manager'])
+  await bar.press({ key: 'open-mod-manager' })
+  expect(w.closes).toEqual(['mod-manager'])
+  await bar.unmount()
 })

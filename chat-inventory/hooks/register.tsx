@@ -19,6 +19,7 @@ import {
 } from './inventory-logic'
 import type { Hit, Use } from './inventory-logic'
 import { statusGrid } from './status-grid'
+import { offCommand, offPane, switchedHidden, switchedOff, watchSwitch } from './switch'
 
 // Chat Inventory, after "Mod #6" of Ben AI's "9 Insane Claude Mods" video:
 // a side pane, In this chat, with live cards for the to-do list, the
@@ -262,6 +263,7 @@ async function toggleFold($: EngineInterface, id: string) {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    await watchSwitch($, 'chat-inventory', 'Chat Inventory')
     const started = await next(e)
     home = (await $.env.get('HOME').catch(() => undefined)) ?? ''
     await $.command
@@ -279,6 +281,8 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'inventory' }, async $ => {
+
+    if (switchedOff()) return offCommand() /* switch-guarded */
     await togglePane($)
 
     return { text: (await read($, isOpenAtom)) ? 'Opened the In this chat pane.' : 'Closed the In this chat pane.' }
@@ -286,6 +290,7 @@ export const register: Register = on => {
 
   // A skill typed as a slash command.
   on('command.run', async ($, e, next) => {
+    if (switchedOff()) return next(e) /* switch-guarded */
     const ran = await next(e)
     if (e.command !== 'inventory' && (await isSkill($, e.command).catch(() => false))) {
       await record($, '', [{ kind: 'skill', name: e.command }], false)
@@ -296,6 +301,7 @@ export const register: Register = on => {
 
   // Every tool call, the main chat's and its subagents': it runs first, then it is counted.
   on('tool.call', async ($, e, next) => {
+    if (switchedOff()) return next(e) /* switch-guarded */
     const ran = await next(e)
     if ((ran as { deny?: unknown }).deny !== undefined) return ran
     const call = e as unknown as Record<string, unknown> & { tool: string; tool_use_id?: string; agentId?: string }
@@ -307,6 +313,8 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('turn.complete', async ($, e, next) => {
+
+    if (switchedOff()) return next(e) /* switch-guarded */
     const done = await next(e)
     await refreshAgents($)
 
@@ -315,6 +323,7 @@ export const register: Register = on => {
 
   // The status-bar button, in the shared grid.
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+    if (switchedOff() || switchedHidden()) return next(e) /* switch-guarded */
     const { Box, Button, Text } = $.ui.resolve(e)
     const below = await next(e)
     const isOpen = await read($, isOpenAtom)
@@ -330,6 +339,8 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+
+    if (switchedOff()) return offPane($, e) /* switch-guarded */
     const { Box, Button, Text } = $.ui.resolve(e)
     const width = Math.max(30, e.props.bodyColumns)
     const inner = width - 4

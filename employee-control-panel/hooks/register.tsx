@@ -4,6 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Alias, GitInfo, Level, MainPicks, SubPicks, Tokens } from '../types'
 
 import { statusGrid } from './status-grid'
+import { offCommand, offPane, switchedHidden, switchedOff, watchSwitch } from './switch'
 
 // Employee Control Panel: a "Control Tools" button in the status bar opens a
 // panel to switch the model and effort level of the main session (it runs
@@ -341,6 +342,7 @@ function mainStatus(model: string, effort: string, picks: MainPicks, busy: boole
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    await watchSwitch($, 'employee-control-panel', 'Control Tools')
     const r = await next(e)
     await $.command.register({ name: 'controls', description: 'Pick the model and effort for Claude and its subagents' })
     // A reload or a new session: no pane, no reply running, this project's picks.
@@ -361,6 +363,8 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'controls' }, async $ => {
+
+    if (switchedOff()) return offCommand() /* switch-guarded */
     await openPanel($)
 
     return { text: 'Opening Control Tools.' }
@@ -369,6 +373,7 @@ export const register: Register = on => {
   // /model and /effort, typed or run by the panel: the status follows.
   // A failure here must never stand in the way of the command itself.
   on('command.run', { command: 'model' }, async ($, e, next) => {
+    if (switchedOff()) return offCommand() /* switch-guarded */
     const r = await next(e)
     await redraw($)
 
@@ -376,6 +381,8 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'effort' }, async ($, e, next) => {
+
+    if (switchedOff()) return offCommand() /* switch-guarded */
     const r = await next(e)
     const level = e.args.trim().toLowerCase()
     if ((LEVELS as string[]).includes(level) && !REFUSED.test(r.text ?? '')) {
@@ -389,6 +396,7 @@ export const register: Register = on => {
 
   // A main-loop reply running: a switch picked now waits for it.
   on('turn.start', async ($, e, next) => {
+    if (switchedOff()) return next(e) /* switch-guarded */
     const r = await next(e)
     if (!e.agentId) await update($, isBusy, () => true)
 
@@ -396,6 +404,8 @@ export const register: Register = on => {
   })
 
   on('turn.complete', async ($, e, next) => {
+
+    if (switchedOff()) return next(e) /* switch-guarded */
     const r = await next(e)
     if (!e.agentId) {
       await update($, isBusy, () => false)
@@ -418,6 +428,7 @@ export const register: Register = on => {
   // Subagent model: every agent but a fork (which always runs as the main
   // session) or a resumed one (whose model is fixed).
   on('agent.spawn', async ($, e, next) => {
+    if (switchedOff()) return next(e) /* switch-guarded */
     const s = await read($, sub)
     const r = !s.model || e.subagentType === 'fork' || e.resume ? await next(e) : await next({ ...e, model: s.model })
     await redraw($)
@@ -427,6 +438,7 @@ export const register: Register = on => {
 
   // Subagent effort: set on each Agent call but a fork's.
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
+    if (switchedOff()) return next(e) /* switch-guarded */
     const s = await read($, sub)
     if (!s.effort || e.subagent_type === 'fork') return next(e)
 
@@ -443,6 +455,7 @@ export const register: Register = on => {
   // Live figures: a measurement after each turn or rate-limit move, and an
   // agent starting, redraw the bar.
   on('session.measure', async ($, e, next) => {
+    if (switchedOff()) return next(e) /* switch-guarded */
     const r = await next(e)
     await redraw($)
 
@@ -452,6 +465,7 @@ export const register: Register = on => {
   // The live session bar, three lines as ccstatusline drew them, under the
   // engine's own hint line (kept live), so it starts at the left edge.
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
+    if (switchedOff() || switchedHidden()) return next(e) /* switch-guarded */
     const { Box, Text } = $.ui.resolve(e)
     const hint = await next(e)
     await read($, tick)
@@ -590,6 +604,7 @@ export const register: Register = on => {
   // The status bar's own place, to the right of the hint line: every mod's
   // button, this one first, in the shared grid at the right edge.
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+    if (switchedOff() || switchedHidden()) return next(e) /* switch-guarded */
     const { Box, Button, Text } = $.ui.resolve(e)
     const below = await next(e)
     const open = await read($, isOpen)
@@ -615,6 +630,7 @@ export const register: Register = on => {
 
   // The panel.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    if (switchedOff()) return offPane($, e) /* switch-guarded */
     const { Box, Button, Text } = $.ui.resolve(e)
     await read($, tick)
     const picks = await read($, main)

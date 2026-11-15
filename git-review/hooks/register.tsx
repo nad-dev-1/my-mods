@@ -3,6 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { AskPath, GrView, MergeRequest, MrRole, PipeFilter, ReviewStatus, Scope, SortBy } from '../types'
 import { statusGrid } from './status-grid'
+import { offCommand, offPane, switchedHidden, switchedOff, watchSwitch } from './switch'
 
 // Git Review: a status-bar button opens a dialog of open GitLab merge requests
 // (assigned to me, asking me to review, and the configured group's), grouped by
@@ -798,6 +799,7 @@ export const register: Register = (on, options) => {
   if (typeof o.allowedPaths === 'string') cfg = { ...cfg, allowed: o.allowedPaths.split(/[\s,]+/).filter(Boolean) }
 
   on('session.start', async ($, e, next) => {
+    await watchSwitch($, 'git-review', 'Git Review')
     const r = await next(e)
     await $.command.register({ name: 'git-review', description: 'Open the Git Review dialog of GitLab merge requests' })
     await update($, isOpen, () => false)
@@ -811,6 +813,8 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'git-review' }, async $ => {
+
+    if (switchedOff()) return offCommand() /* switch-guarded */
     await openDialog($)
 
     return { text: 'Opening Git Review.' }
@@ -871,6 +875,7 @@ export const register: Register = (on, options) => {
 
   // The status-bar button.
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+    if (switchedOff() || switchedHidden()) return next(e) /* switch-guarded */
     const { Box, Button, Text } = $.ui.resolve(e)
     const below = await next(e)
     const open = await read($, isOpen)
@@ -905,6 +910,7 @@ export const register: Register = (on, options) => {
 
   // The dialog.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    if (switchedOff()) return offPane($, e) /* switch-guarded */
     const elements = $.ui.resolve(e)
     const { Box, Button, Text } = elements
     const Input = 'Input' in elements ? elements.Input : undefined

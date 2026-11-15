@@ -40,6 +40,7 @@ import {
   tilesPerRow,
 } from './dock-logic'
 import { statusGrid } from './status-grid'
+import { offCommand, offPane, switchedHidden, switchedOff } from './switch'
 
 type E$ = EngineInterface
 
@@ -805,6 +806,8 @@ export function registerDock(on: On): void {
   })
 
   on('command.run', { command: 'dock' }, ($, e) => {
+
+    if (switchedOff()) return offCommand() /* switch-guarded */
     try {
       const arg = e.args.trim()
       if (arg) {
@@ -833,6 +836,7 @@ export function registerDock(on: On): void {
 
   // 1. Tell Claude to split the work.
   on('prompt.submit', async ($, e, next) => {
+    if (switchedOff()) return next(e) /* switch-guarded */
     const o = e.origin as { kind: string; name?: string }
     if (o.kind === 'plugin' && o.name === PLUGIN) return next(e) // the dock's own nudge
     if (!isTyped(e)) return next(e)
@@ -852,6 +856,7 @@ export function registerDock(on: On): void {
 
   // 4. Queued cards as soon as Claude writes the Agent calls.
   on('session.append', { door: 'response' }, async ($, e, next) => {
+    if (switchedOff()) return next(e) /* switch-guarded */
     const stored = await next(e)
     if (e.agentId === undefined && run && run.status === 'live') {
       const blocks = (Array.isArray(e.message.content) ? e.message.content : []) as { type?: string; id?: string; name?: string; input?: { description?: unknown } }[]
@@ -871,6 +876,7 @@ export function registerDock(on: On): void {
 
   // 2 and 3. Cap at Team Size, force the helper model, and hold calls past the engine's limit.
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
+    if (switchedOff()) return next(e) /* switch-guarded */
     if (e.agentId !== undefined) return next(e) // a helper's own helpers are not the team
     const input = e as unknown as { tool_use_id: string; description?: string; prompt?: string; model?: string }
     const now = await $.clock.now()
@@ -943,12 +949,14 @@ export function registerDock(on: On): void {
 
   // Helpers skip Clean View's plan.
   on('tool.call', { tool: /plan_steps$/, agentId: /./ }, async ($, e, next) => {
+    if (switchedOff()) return next(e) /* switch-guarded */
     if (e.agentId !== undefined) return { result: 'Helpers skip the plan. Just call report_progress as you work.' }
     return next(e)
   }).catch(($, e, next) => next(e))
 
   // Which helper is which: a helper's first turn starts with its Agent call's prompt.
   on('turn.start', async ($, e, next) => {
+    if (switchedOff()) return next(e) /* switch-guarded */
     if (e.agentId === undefined) mainTurnOpen = true
     if (e.agentId !== undefined && run && !agentOf.has(e.agentId)) {
       for (const [id, text] of promptOf) {
@@ -963,6 +971,7 @@ export function registerDock(on: On): void {
 
   // 2. The nudge, and the summary once every helper is back.
   on('turn.complete', async ($, e, next) => {
+    if (switchedOff()) return next(e) /* switch-guarded */
     const result = await next(e)
     if (e.agentId === undefined) mainTurnOpen = false
     if (e.agentId !== undefined || !run || run.status !== 'live') return result
@@ -990,6 +999,7 @@ export function registerDock(on: On): void {
 
   // The ◆ Dock button in the status bar, beside whatever is drawn there.
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+    if (switchedOff() || switchedHidden()) return next(e) /* switch-guarded */
     const { Box, Text, Button } = $.ui.resolve(e) as unknown as Els
     const below = await next(e)
     const modes = e.props.modes
@@ -1015,6 +1025,8 @@ export function registerDock(on: On): void {
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+
+    if (switchedOff()) return offPane($, e) /* switch-guarded */
     const els = $.ui.resolve(e) as unknown as Els
     const { Box } = els
     const w = Math.max(24, e.props.bodyColumns)

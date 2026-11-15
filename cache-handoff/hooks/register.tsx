@@ -5,6 +5,7 @@ import type { HandoffState } from '../types'
 import { checkHandoff, handoffPrompt, scanMessages, slugOf, stampOf, usedFigure, wordCount } from './handoff-logic'
 import type { Msg } from './handoff-logic'
 import { statusGrid } from './status-grid'
+import { offCommand, switchedHidden, switchedOff, watchSwitch } from './switch'
 
 // Cache Clock, after "Mod #3" of Ben AI's "9 Insane Claude Mods" video (itself
 // inspired by Karan Bansal's Cache Tax): a card above the prompt counting down
@@ -245,6 +246,7 @@ async function arm($: EngineInterface) {
 /** Auto-warm off: one notification, 5 minutes before this hour's cache goes cold. */
 async function warnCold($: EngineInterface) {
   warnTimer = null
+  if (switchedOff()) return
   if (await read($, isKeepOn)) return
   const last = await read($, lastRequestAt)
   const now = await $.clock.now()
@@ -266,6 +268,8 @@ async function pause($: EngineInterface, reason: string) {
 /** The ping, when it is still due: switch on, cache warm, no turn running, none in flight. */
 async function keepAlive($: EngineInterface) {
   keepAliveTimer = null
+  // Switched off in /mods: no pings until it is on again and a reply re-arms them.
+  if (switchedOff()) return
   const gen = armGen
   if (!(await read($, isKeepOn)) || (await read($, pausedReason)) !== '') return
   const last = await read($, lastRequestAt)
@@ -629,6 +633,7 @@ export const ENGLISH_NOTES = [
 export const register: Register = on => {
   // ctx-handoff's project notes in English: add the instruction to its notes request.
   on('model.complete', async ($, e, next) => {
+    if (switchedOff()) return next(e) /* switch-guarded */
     const system = e.system ?? ''
     if (!isNotesRequest(system, next.origin.plugin) || system.includes(ENGLISH_NOTES)) return next(e)
 
@@ -637,12 +642,14 @@ export const register: Register = on => {
 
   // Handoff documents in English: add the instruction to ctx-handoff's request.
   on('model.fork', async ($, e, next) => {
+    if (switchedOff()) return next(e) /* switch-guarded */
     if (!isHandoffRequest(e.prompt, next.origin.plugin) || e.prompt.includes(ENGLISH_HANDOFF)) return next(e)
 
     return next({ ...e, prompt: `${e.prompt}${ENGLISH_HANDOFF}` })
   }).catch(($, e, next) => next(e))
 
   on('session.start', async ($, e, next) => {
+    await watchSwitch($, 'cache-handoff', 'Cache Clock & Handoff')
     const started = await next(e)
     const kept = await $.store.get(KEEP_STORE).catch(() => undefined)
     await update($, isKeepOn, () => kept === true)
@@ -665,6 +672,8 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'handoff-new' }, async $ => {
+
+    if (switchedOff()) return offCommand() /* switch-guarded */
     await startHandoff($)
 
     return { text: 'Building a handoff: follow its steps above the prompt.' }
@@ -712,6 +721,7 @@ export const register: Register = on => {
   // The cold-send guard: on a cold, large chat, the first message a person
   // typed is held back once with the rewrite price; sending again goes ahead.
   on('prompt.submit', async ($, e, next) => {
+    if (switchedOff()) return next(e) /* switch-guarded */
     if (e.command || e.isMeta || e.origin.kind !== 'composer') return next(e)
     const last = await read($, lastRequestAt)
     const now = await $.clock.now()
@@ -763,6 +773,7 @@ export const register: Register = on => {
 
   // The Handoff button in the status bar, beside the other mods' buttons.
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+    if (switchedOff() || switchedHidden()) return next(e) /* switch-guarded */
     const { Box, Button, Text } = $.ui.resolve(e)
     const below = await next(e)
     const phase = (await read($, handoffAtom)).phase
@@ -791,6 +802,7 @@ export const register: Register = on => {
 
   // The card above the prompt.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (switchedOff() || switchedHidden()) return next(e) /* switch-guarded */
     const rest = await next(e)
     if (e.props.hasSurvey) return rest
     const { Box, Button, Text } = $.ui.resolve(e)

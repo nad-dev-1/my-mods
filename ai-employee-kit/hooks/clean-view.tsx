@@ -30,6 +30,7 @@ import {
   newChecklist,
   titleFromRequest,
 } from './clean-view-logic'
+import { offCommand, switchedHidden, switchedOff, watchSwitch } from './switch'
 
 type E$ = EngineInterface
 
@@ -268,6 +269,7 @@ function Row(els: Els, task: CleanTask, isFirstUpcoming: boolean, isPaused: bool
 
 export function registerCleanView(on: On): void {
   on('session.start', { cwd: /^/ }, async ($, e, next) => {
+    await watchSwitch($, 'ai-employee-kit', 'AI Employee Kit')
     await $.command.register({
       name: 'simple',
       description: 'Clean View: hide the technical details and show a simple checklist (on, off)',
@@ -318,6 +320,8 @@ export function registerCleanView(on: On): void {
   })
 
   on('command.run', { command: 'simple' }, async ($, e) => {
+
+    if (switchedOff()) return offCommand() /* switch-guarded */
     try {
       const arg = e.args.trim().toLowerCase()
       if (arg && arg !== 'on' && arg !== 'off') return { text: 'Use /simple on, /simple off, or /simple to switch.' }
@@ -331,6 +335,7 @@ export function registerCleanView(on: On): void {
 
   // 2. Make Claude use the plan tools.
   on('prompt.compose', async ($, e, next) => {
+    if (switchedOff()) return next(e) /* switch-guarded */
     const composed = await next(e)
     if (!enabled) return composed
     return { sections: [...composed.sections, { id: 'ai-employee-kit:clean-view', text: SYSTEM_SECTION(PLAN_TOOL, PROGRESS_TOOL), scope: 'session' as const }] }
@@ -338,6 +343,7 @@ export function registerCleanView(on: On): void {
 
   // Which turns are the person's own requests.
   on('prompt.submit', { text: /^/ }, async ($, e, next) => {
+    if (switchedOff()) return next(e) /* switch-guarded */
     const result = await next(e)
     if (result.drop === undefined && e.turnId === undefined) {
       pendingTyped = isTyped(e)
@@ -348,6 +354,7 @@ export function registerCleanView(on: On): void {
 
   // 4. A new job, or the reply that continues one.
   on('turn.start', { turnId: /^/ }, async ($, e, next) => {
+    if (switchedOff()) return next(e) /* switch-guarded */
     if (e.agentId === undefined && enabled) {
       const isRequest = pendingTyped && !pendingCommand && e.text.trim() !== ''
       pendingTyped = false
@@ -367,6 +374,7 @@ export function registerCleanView(on: On): void {
 
   // 3 and 4. Plan first, and fill the checklist from what Claude already does.
   on('tool.call', async ($, e, next) => {
+    if (switchedOff()) return next(e) /* switch-guarded */
     if (e.agentId !== undefined || !enabled || !list || list.phase === 'done' || list.phase === 'stopped') return next(e)
     const tool = String(e.tool)
     const input = e as unknown as Record<string, unknown>
@@ -430,11 +438,14 @@ export function registerCleanView(on: On): void {
 
   // Permission prompts: Needs you, right away.
   on('classic.PermissionRequest', async ($, e, next) => {
+    if (switchedOff()) return next(e) /* switch-guarded */
     if (enabled && list && list.phase !== 'done' && list.phase !== 'stopped') await setPhase($, 'needsYou', { needsYou: NEEDS_OK }).catch(() => undefined)
     return next(e)
   })
 
   on('classic.Notification', async ($, e, next) => {
+
+    if (switchedOff()) return next(e) /* switch-guarded */
     const isPermission = /permission/i.test(`${e.notification_type} ${e.message}`)
     if (isPermission && enabled && list && list.phase !== 'done' && list.phase !== 'stopped') {
       await setPhase($, 'needsYou', { needsYou: NEEDS_OK }).catch(() => undefined)
@@ -443,6 +454,8 @@ export function registerCleanView(on: On): void {
   })
 
   on('classic.StopFailure', async ($, e, next) => {
+
+    if (switchedOff()) return next(e) /* switch-guarded */
     lastError = { kind: String(e.error), details: e.error_details }
     if (enabled && list && list.phase !== 'done') await setPhase($, 'stuck', { stuck: friendlyError(lastError.kind, lastError.details) }).catch(() => undefined)
     return next(e)
@@ -450,6 +463,7 @@ export function registerCleanView(on: On): void {
 
   // How the job ended.
   on('turn.complete', { turnId: /^/ }, async ($, e, next) => {
+    if (switchedOff()) return next(e) /* switch-guarded */
     const result = await next(e)
     if (e.agentId !== undefined || !enabled || !list || list.phase === 'done') return result
     try {
@@ -478,28 +492,34 @@ export function registerCleanView(on: On): void {
 
   // 5. Hide the technical rows (ctrl+o still shows them all).
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
+    if (switchedOff() || switchedHidden()) return next(e) /* switch-guarded */
     if (await isRowShown($, e.props.isExpanded)) return next(e)
     const { Box } = $.ui.resolve(e) as unknown as Els
     return <Box />
   }).catch(($, e, next) => next(e))
   on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
+    if (switchedOff() || switchedHidden()) return next(e) /* switch-guarded */
     if (await isRowShown($, e.props.isExpanded)) return next(e)
     const { Box } = $.ui.resolve(e) as unknown as Els
     return <Box />
   }).catch(($, e, next) => next(e))
   on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
+    if (switchedOff() || switchedHidden()) return next(e) /* switch-guarded */
     if (await isRowShown($, e.props.isExpanded)) return next(e)
     const { Box } = $.ui.resolve(e) as unknown as Els
     return <Box />
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'ToolProgress' }, async ($, e, next) => {
+
+    if (switchedOff() || switchedHidden()) return next(e) /* switch-guarded */
     const isOn = (await $.state.get(ENABLED)).value ?? true
     return isOn ? next({ ...e, props: { ...e.props, hint: '' } }) : next(e)
   }).catch(($, e, next) => next(e))
 
   // The checklist above the prompt, with the button on every screen.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (switchedOff() || switchedHidden()) return next(e) /* switch-guarded */
     // What the other mods drew in this band (a cache card, a progress bar):
     // drawn first and kept, never replaced.
     const below = await next(e)

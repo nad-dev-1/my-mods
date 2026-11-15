@@ -1,5 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { statusGrid } from './status-grid'
+import { switchedHidden, switchedOff, watchSwitch } from './switch'
 
 // A status-bar button that shows or hides the filetree mod's sidebar, as
 // `/filetree` does. The tree itself stays filetree's: this only runs the command.
@@ -35,7 +36,14 @@ async function toggleTree($: EngineInterface): Promise<void> {
 }
 
 export const register: Register = on => {
+  on('session.start', async ($, e, next) => {
+    await watchSwitch($, 'filetree-button', 'Files button')
+
+    return next(e)
+  })
+
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+    if (switchedOff() || switchedHidden()) return next(e) /* switch-guarded */
     const { Box, Button, Text } = $.ui.resolve(e)
     const below = await next(e)
     const modes = e.props.modes
