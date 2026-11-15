@@ -13,6 +13,7 @@ Claude Code mods: plugins with a hooks module that change what Claude Code does 
 | [`filetree-button/`](filetree-button/) | A Files button in the status bar that shows or hides the filetree mod's file tree |
 | [`inject-prompt/`](inject-prompt/) | An Inject button in the status bar that opens your saved prompts, grouped by category and filterable by tag or search, and inserts the ones you pick at the cursor |
 | [`git-review/`](git-review/) | A Git Review button that lists your GitLab merge requests by project and starts a full review of one in a new terminal: conflicts, worktree, pipelines and scans, Sonar, and the project's own code review |
+| [`employee-control-panel/`](employee-control-panel/) | A Control Tools button in the status bar that opens a panel to switch the model and effort level for Claude and its subagents, with a live status line |
 
 ## Install
 

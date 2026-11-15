@@ -51,6 +51,11 @@
       "name": "git-review",
       "source": "./git-review",
       "description": "A Git Review button that lists your GitLab merge requests by project and starts a full review of one in a new terminal: conflicts, worktree, pipelines and scans, Sonar, and the project's own code review"
+    },
+    {
+      "name": "employee-control-panel",
+      "source": "./employee-control-panel",
+      "description": "A Control Tools button in the status bar that opens a panel to switch the model and effort level for Claude and its subagents, with a live status line"
     }
   ]
 }
