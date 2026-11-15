@@ -1,13 +1,17 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { HandoffMode } from '../types'
+import type { HandoffState } from '../types'
+import { checkHandoff, handoffPrompt, scanMessages, slugOf, stampOf, usedFigure, wordCount } from './handoff-logic'
+import type { Msg } from './handoff-logic'
 import { statusGrid } from './status-grid'
 
 // Cache Clock, after "Mod #3" of Ben AI's "9 Insane Claude Mods" video (itself
 // inspired by Karan Bansal's Cache Tax): a card above the prompt counting down
 // the hour the prompt cache stays warm, an Auto-warm switch that keeps it warm
-// with invisible pings, and a Create Handoff button for ctx-handoff.
+// with invisible pings. And the Handoff, after the video's "Mod #4": a banner
+// past 250k (or on a cold cache), a five-step progress card while the handoff
+// is written, and a ready card that starts the new chat from it.
 
 /** This session's prompt cache lives an hour after the last request reads it. */
 const TTL_MS = 60 * 60 * 1000
@@ -24,6 +28,19 @@ const API_RETRY_MS = 60 * 1000
 const GUARD_MIN_TOKENS = 50_000
 /** The bar's length in cells. */
 const BAR_CELLS = 24
+/** The Refresh banner shows from this context size, and again each 50k after a Hide. */
+const BANNER_AT = 250_000
+const BANNER_STEP = 50_000
+/** While work is under way, the handoff looks again this often before it starts. */
+const WAIT_POLL_MS = 2000
+/** The `$.store` key set once ctx-handoff's own keep-warm refresh was switched off. */
+const CTX_REFRESH_STORE = 'ctx-refresh-off'
+/** Where handoffs are saved, under the project root; kept out of git locally. */
+const HANDOFF_DIR = '.claude/handoffs'
+/** The progress card's five steps. */
+export const STEPS = ['Reading the conversation', 'Finding the files you used', 'Listing skills, tools and links', 'Writing the handoff', 'Saving and checking']
+/** Cells in each step's bar. */
+const STEP_CELLS = 12
 
 /**
  * The ping: a tool-less question over the chat as the main thread last sent
@@ -127,17 +144,27 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-/** The small dialog the status-bar Handoff button opens. */
-const CHOICE_PANE = 'cache-handoff-choice'
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 
-/** A handoff asked for while Claude was replying: it starts when the reply ends. */
-let queued: HandoffMode | null = null
+export const HANDOFF_IDLE: HandoffState = {
+  phase: 'idle',
+  step: 0,
+  figures: ['', '', '', '', ''],
+  waitingFor: '',
+  writingSince: 0,
+  text: '',
+  words: 0,
+  path: '',
+  shownPath: '',
+  costUsd: 0,
+  saving: '',
+  error: '',
+}
 
 const lastRequestAt = atom({ plugin: 'cache-handoff', key: 'lastRequestAt' } as const, 0)
 const isKeepOn = atom({ plugin: 'cache-handoff', key: 'isKeepOn' } as const, false)
 const isTurnRunning = atom({ plugin: 'cache-handoff', key: 'isTurnRunning' } as const, false)
 const nowAtom = atom({ plugin: 'cache-handoff', key: 'now' } as const, 0)
-const isChoosingHandoff = atom({ plugin: 'cache-handoff', key: 'isChoosingHandoff' } as const, false)
 const lastKeepAliveAt = atom({ plugin: 'cache-handoff', key: 'lastKeepAliveAt' } as const, 0)
 const note = atom({ plugin: 'cache-handoff', key: 'note' } as const, '')
 const isHidden = atom({ plugin: 'cache-handoff', key: 'isHidden' } as const, false)
@@ -147,6 +174,10 @@ const pingsUsd = atom({ plugin: 'cache-handoff', key: 'pingsUsd' } as const, 0)
 const pausedReason = atom({ plugin: 'cache-handoff', key: 'pausedReason' } as const, '')
 const guardedFor = atom({ plugin: 'cache-handoff', key: 'guardedFor' } as const, 0)
 const warnedFor = atom({ plugin: 'cache-handoff', key: 'warnedFor' } as const, 0)
+const handoffAtom = atom({ plugin: 'cache-handoff', key: 'handoff' } as const, HANDOFF_IDLE, { shape: 'handoff-v1' })
+const bannerHiddenAt = atom({ plugin: 'cache-handoff', key: 'bannerHiddenAt' } as const, 0)
+const coldBannerHiddenFor = atom({ plugin: 'cache-handoff', key: 'coldBannerHiddenFor' } as const, 0)
+const recentAtom = atom({ plugin: 'cache-handoff', key: 'recent' } as const, [] as string[])
 
 type Timer = { cancel: () => void }
 
@@ -157,6 +188,11 @@ let ticker: Timer | null = null
 let armGen = 0
 let sawStepThisTurn = false
 let pingInFlight = false
+/** The handoff under way: a Cancel or a new one moves it, and the old one's results are dropped. */
+let handoffGen = 0
+let isBuilding = false
+let waitTimer: Timer | null = null
+let writeTicker: Timer | null = null
 
 async function say($: EngineInterface, text: string) {
   await update($, note, () => text)
@@ -312,65 +348,245 @@ async function setHidden($: EngineInterface, hidden: boolean) {
   await $.store.set(HIDE_STORE, hidden).catch(() => undefined)
 }
 
-/** Runs ctx-handoff's own command: `now` hands off (clears the chat), `dry` only writes it. */
-async function runHandoff($: EngineInterface, mode: HandoffMode) {
-  await update($, isChoosingHandoff, () => false)
-  try {
-    const commands = await $.command.list()
-    const own = commands.find(c => c.plugin === 'ctx-handoff' && (c.name === 'handoff' || c.name === 'ctx-handoff'))
-    const command = own?.name ?? commands.find(c => c.name === 'ctx-handoff')?.name
-    if (!command) {
-      await say($, 'Create Handoff needs the ctx-handoff mod installed and turned on.')
+// ── The handoff (Mod #4) ──────────────────────────────────────────────────
 
-      return
-    }
-    await say($, '')
-    // A handoff takes a minute or more, past a press's 10s budget: start it on
-    // its own timer and return, as ctx-handoff starts its own.
-    $.clock.after(0, () => {
-      void startHandoff($, command, mode)
-    })
-  } catch (err) {
-    await say($, `The handoff could not start (${errorText(err)}).`)
-  }
+async function setHandoff($: EngineInterface, patch: (h: HandoffState) => Partial<HandoffState>) {
+  await update($, handoffAtom, h => ({ ...h, ...patch(h) }))
 }
 
-/** The status-bar button: a small dialog with the same two choices as the card. */
-async function openChoice($: EngineInterface) {
-  const opened = await $.ui.open({
-    id: CHOICE_PANE,
-    title: 'Handoff',
-    focus: true,
-    closeOnEscape: true,
-    holdToasts: true,
-    rows: 7,
-    columns: 46,
-    backgroundColor: C.sheet,
+/** Sets step `i`'s figure (0 to 4) and moves on to the next step. */
+async function stepDone($: EngineInterface, i: number, figure: string) {
+  await setHandoff($, h => {
+    const figures = [...h.figures]
+    figures[i] = figure
+
+    return { figures, step: i + 2 }
   })
-  if (!opened.isPlaced) {
-    // No room for a dialog: fall back to the choice row above the prompt.
-    await update($, isChoosingHandoff, () => true)
-  }
 }
 
-/** A choice from the dialog: now, or once the reply under way has ended. */
-async function chooseFromDialog($: EngineInterface, mode: HandoffMode) {
-  await $.ui.close({ id: CHOICE_PANE }).catch(() => undefined)
-  if (await read($, isTurnRunning)) {
-    queued = mode
-    await say($, `The handoff (${mode === 'now' ? 'hand off now' : 'just write it'}) starts when Claude's reply ends.`)
+/** What the handoff waits for before it can read the conversation whole; '' when nothing. */
+async function busyWith($: EngineInterface): Promise<string> {
+  if (await read($, isTurnRunning)) return "Claude's reply"
+  const agents = await $.agent.list().catch(() => [])
+  const running = agents.filter(a => a.status === 'running' || a.status === 'pending').length
+
+  return running ? `${plural(running, 'subagent')} to finish` : ''
+}
+
+/** Refresh, Create Handoff, ⇄ Handoff and /handoff-new: build a handoff once work is done. */
+export async function startHandoff($: EngineInterface) {
+  const h = await read($, handoffAtom)
+  if (h.phase === 'waiting' || h.phase === 'running') return
+  const gen = ++handoffGen
+  waitTimer?.cancel()
+  waitTimer = null
+  await update($, handoffAtom, () => ({ ...HANDOFF_IDLE, phase: 'waiting' as const }))
+  await update($, recentAtom, () => [])
+  await say($, '')
+  // The writing takes a minute, past a press's 10s budget: it runs on its own timer.
+  $.clock.after(0, () => {
+    void proceed($, gen)
+  })
+}
+
+async function proceed($: EngineInterface, gen: number) {
+  if (gen !== handoffGen || isBuilding || (await read($, handoffAtom)).phase !== 'waiting') return
+  const busy = await busyWith($)
+  if (gen !== handoffGen) return
+  if (busy) {
+    await setHandoff($, () => ({ waitingFor: busy }))
+    waitTimer?.cancel()
+    waitTimer = $.clock.after(WAIT_POLL_MS, () => {
+      void proceed($, gen)
+    })
 
     return
   }
-  await runHandoff($, mode)
+  await build($, gen)
 }
 
-async function startHandoff($: EngineInterface, command: string, mode: HandoffMode) {
+export async function cancelHandoff($: EngineInterface) {
+  handoffGen++
+  waitTimer?.cancel()
+  waitTimer = null
+  writeTicker?.cancel()
+  writeTicker = null
+  await update($, handoffAtom, () => HANDOFF_IDLE)
+  await update($, recentAtom, () => [])
+}
+
+async function fail($: EngineInterface, gen: number, error: string) {
+  if (gen !== handoffGen) return
+  await setHandoff($, () => ({ phase: 'failed' as const, error }))
+}
+
+/** The five steps: read, find files, list what was used, write, save and check. */
+async function build($: EngineInterface, gen: number) {
+  if (isBuilding) return
+  isBuilding = true
+  const live = () => gen === handoffGen
   try {
-    await $.command.run({ command, args: mode })
+    await setHandoff($, () => ({ phase: 'running' as const, step: 1, waitingFor: '' }))
+    const raw = await $.session.messages()
+    const msgs = (Array.isArray(raw) ? raw : []) as Msg[]
+    const scan = scanMessages(msgs)
+    if (!live()) return
+    await stepDone($, 0, plural(scan.count, 'message'))
+    await stepDone($, 1, plural(scan.files.length, 'file'))
+    await stepDone($, 2, usedFigure(scan))
+
+    const root = await $.session.root().catch(() => $.session.cwd())
+    const tokensBefore = await chatTokens($)
+    const startedAt = await $.clock.now()
+    await setHandoff($, h => {
+      const figures = [...h.figures]
+      figures[3] = '0s'
+
+      return { figures, writingSince: startedAt }
+    })
+    writeTicker?.cancel()
+    writeTicker = $.clock.every(1000, () => {
+      void (async () => {
+        if (!live()) return
+        const now = await $.clock.now()
+        await setHandoff($, h => {
+          if (h.phase !== 'running' || h.step !== 4) return {}
+          const figures = [...h.figures]
+          figures[3] = `${Math.floor((now - h.writingSince) / 1000)}s`
+
+          return { figures }
+        })
+      })()
+    })
+    let result: Awaited<ReturnType<EngineInterface['model']['fork']>>
+    try {
+      result = await $.model.fork({ prompt: handoffPrompt(root, scan) })
+    } finally {
+      writeTicker?.cancel()
+      writeTicker = null
+    }
+    if (!live()) return
+    if (!result.isAnswered) {
+      const why =
+        result.reason === 'nothing-to-fork'
+          ? 'there is no finished reply to read yet (send a message first, then try again)'
+          : `the model could not write it (${result.reason}${'status' in result && result.status ? ` ${result.status}` : ''})`
+
+      return fail($, gen, `The handoff was not written: ${why}.`)
+    }
+    const text = result.text.trim()
+    const problem = checkHandoff(text)
+    if (problem) return fail($, gen, `The handoff came back unusable: ${problem}. Try again.`)
+    const seconds = Math.max(1, Math.round(((await $.clock.now()) - startedAt) / 1000))
+    await stepDone($, 3, `${seconds}s`)
+
+    const name = `${stampOf(await $.clock.now())}-${slugOf(text)}.md`
+    const shownPath = `${HANDOFF_DIR}/${name}`
+    const path = `${root}/${shownPath}`
+    await $.fs.write(path, `${text}\n`)
+    const back = await $.fs.read(path).catch(() => '')
+    if (back.trim() !== text) return fail($, gen, `The handoff was written but ${shownPath} does not read back the same.`)
+    await keepOutOfGit($, root)
+    if (!live()) return
+    await stepDone($, 4, name)
+
+    const model = await $.session.model().catch(() => '')
+    const costUsd = usdOf(model, result.usage) ?? 0
+    await setHandoff($, () => ({
+      phase: 'ready' as const,
+      step: 6,
+      text,
+      words: wordCount(text),
+      path,
+      shownPath,
+      costUsd,
+      saving: savingText(model, tokensBefore, text),
+    }))
   } catch (err) {
-    await say($, `The handoff could not start (${errorText(err)}).`)
+    await fail($, gen, `The handoff could not be built (${errorText(err)}).`)
+  } finally {
+    isBuilding = false
   }
+}
+
+/** The ready card's per-message saving: the new chat sends the handoff, not the whole chat. */
+function savingText(model: string, tokens: number, text: string): string {
+  const fresh = Math.ceil(text.length / 4)
+  if (tokens <= fresh) return ''
+  const p = priceOf(model)
+  const dollars = p ? `: ~${fmtUsd(((tokens - fresh) * p[0]) / 1e6)} less per message while warm, ~${fmtUsd(((tokens - fresh) * p[1]) / 1e6)} less when cold` : ''
+
+  return `Each message in the new chat starts from about ${fmtK(fresh)} tokens instead of ${fmtK(tokens)}${dollars}.`
+}
+
+/** Adds the handoffs folder to the repository's own exclude file: never committed, never shared. */
+async function keepOutOfGit($: EngineInterface, root: string) {
+  const found = await $.process.run(['git', 'rev-parse', '--git-path', 'info/exclude'], { cwd: root }).catch(() => null)
+  if (!found || found.exitCode !== 0 || !found.stdout.trim()) return
+  const rel = found.stdout.trim()
+  const exclude = rel.startsWith('/') ? rel : `${root}/${rel}`
+  const current = await $.fs.read(exclude).catch(() => '')
+  if (current.split('\n').some(line => line.trim().replace(/^\//, '').replace(/\/$/, '') === HANDOFF_DIR)) return
+  const sep = current === '' || current.endsWith('\n') ? '' : '\n'
+  await $.fs.write(exclude, `${current}${sep}# cache-handoff: saved handoffs stay on this machine\n${HANDOFF_DIR}/\n`).catch(() => undefined)
+}
+
+async function copyHandoff($: EngineInterface, surface?: Parameters<EngineInterface['ui']['copy']>[0]['surface']) {
+  const h = await read($, handoffAtom)
+  const r = await $.ui.copy({ text: h.text, ...(surface ? { surface } : {}) }).catch(() => ({ isCopied: false }))
+  await say($, r.isCopied ? 'Copied the handoff prompt: paste it into any new chat.' : 'The handoff could not be copied here; open the file instead.')
+}
+
+/** /clear, then the handoff in the prompt box, followed by whatever was typed meanwhile; not sent. */
+async function startNewChat($: EngineInterface) {
+  const h = await read($, handoffAtom)
+  if (h.phase !== 'ready') return
+  $.clock.after(0, () => {
+    void (async () => {
+      try {
+        const typed = (await $.prompt.read().catch(() => ({ text: '' }))).text.trim()
+        await $.command.run({ command: 'clear', args: '' })
+        await $.prompt.fill({ text: typed ? `${h.text}\n\n${typed}` : h.text })
+        await cancelHandoff($)
+        await say($, `New chat started from ${h.shownPath}: read it over, then send.`)
+      } catch (err) {
+        await say($, `The new chat could not be started (${errorText(err)}). Copy the handoff prompt instead.`)
+      }
+    })()
+  })
+}
+
+async function openFile($: EngineInterface, path: string) {
+  for (const opener of ['open', 'xdg-open']) {
+    const r = await $.process.run([opener, path]).catch(() => null)
+    if (r && r.exitCode === 0) return
+  }
+  await say($, `Could not open ${path}.`)
+}
+
+/** Earlier handoffs of this project, newest first, at most five; pressed again it folds. */
+async function toggleRecent($: EngineInterface) {
+  if ((await read($, recentAtom)).length) return update($, recentAtom, () => [])
+  const h = await read($, handoffAtom)
+  const root = await $.session.root().catch(() => $.session.cwd())
+  const entries = await $.fs.list(`${root}/${HANDOFF_DIR}`).catch(() => [])
+  const names = [...entries]
+    .filter(f => f.kind === 'file' && f.name.endsWith('.md') && `${root}/${HANDOFF_DIR}/${f.name}` !== h.path)
+    .sort((a, b) => b.mtimeMs - a.mtimeMs || b.name.localeCompare(a.name))
+    .slice(0, 5)
+    .map(f => f.name)
+  if (!names.length) return say($, 'No earlier handoffs in this project.')
+  await update($, recentAtom, () => names)
+}
+
+/** Switches ctx-handoff's own keep-warm refresh off once: Auto-warm does that job here. */
+async function quietCtxHandoff($: EngineInterface) {
+  if ((await $.store.get(CTX_REFRESH_STORE).catch(() => undefined)) === true) return
+  const commands = await $.command.list().catch(() => [])
+  const own = commands.find(c => c.plugin === 'ctx-handoff' && c.name === 'handoff')
+  if (!own) return
+  await $.command.run({ command: own.name, args: 'refresh off' })
+  await $.store.set(CTX_REFRESH_STORE, true)
 }
 
 /**
@@ -438,8 +654,20 @@ export const register: Register = on => {
     })
     await tick($)
     await arm($)
+    await $.command
+      .register({ name: 'handoff-new', description: 'Write a full handoff of this chat, save it, and start a new chat from it' })
+      .catch(() => undefined)
+    $.clock.after(0, () => {
+      void quietCtxHandoff($).catch(() => undefined)
+    })
 
     return started
+  })
+
+  on('command.run', { command: 'handoff-new' }, async $ => {
+    await startHandoff($)
+
+    return { text: 'Building a handoff: follow its steps above the prompt.' }
   })
 
   // Each request the main conversation sends reads the cache and restarts its hour.
@@ -469,10 +697,12 @@ export const register: Register = on => {
       await update($, warnedFor, () => 0)
       await tick($)
       await arm($)
-      if (queued) {
-        const mode = queued
-        queued = null
-        await runHandoff($, mode)
+      // A handoff waiting for this reply starts now, unless subagents still run.
+      if ((await read($, handoffAtom)).phase === 'waiting') {
+        const gen = handoffGen
+        $.clock.after(0, () => {
+          void proceed($, gen)
+        })
       }
     }
 
@@ -501,7 +731,7 @@ export const register: Register = on => {
     })
 
     return {
-      drop: `The prompt cache went cold ${fmtAgo(now - last - TTL_MS)} ago: sending this writes about ${fmtK(tokens)} tokens again${cold}. Send it again to go ahead, or use Create Handoff to start fresh from a summary.`,
+      drop: `The prompt cache went cold ${fmtAgo(now - last - TTL_MS)} ago: sending this writes about ${fmtK(tokens)} tokens again${cold}. Send it again to go ahead, or press Refresh (or /handoff-new) to move this work to a new chat with a full handoff.`,
     }
   }).catch(($, e, next) => next(e))
 
@@ -535,7 +765,9 @@ export const register: Register = on => {
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
     const { Box, Button, Text } = $.ui.resolve(e)
     const below = await next(e)
-    const fill = queued ? C.coralBright : C.coral
+    const phase = (await read($, handoffAtom)).phase
+    const isBusy = phase === 'waiting' || phase === 'running'
+    const fill = isBusy ? C.coralBright : C.coral
     const modes = e.props.modes
 
     // Every mod's status-bar button goes in one shared grid (status-grid.tsx).
@@ -546,38 +778,15 @@ export const register: Register = on => {
       <Button
           key="open-handoff"
           plain
-          onPress={async () => {
-            // Opened within the press, so it counts as asked for.
-            await openChoice($)
-          }}
+          onPress={() => startHandoff($)}
         >
           <Text color={fill}>▐</Text>
           <Text backgroundColor={fill} color={C.ink} bold>
-            {queued ? '⇄ Handoff …' : '⇄ Handoff'}
+            {isBusy ? '⇄ Handoff …' : '⇄ Handoff'}
           </Text>
           <Text color={fill}>▌</Text>
         </Button>,
     ) as never
-  })
-
-  // The dialog it opens.
-  on('ui.render', { component: 'Pane', requestId: CHOICE_PANE }, async ($, e) => {
-    const { Box, Button, Text } = $.ui.resolve(e)
-    const busy = await read($, isTurnRunning)
-
-    return (
-      <Box flexDirection="column">
-        <Text bold color={C.coral}>
-          ⇄ Create a handoff
-        </Text>
-        <Text dimColor>{busy ? 'Claude is replying: it starts when the reply ends.' : 'ctx-handoff writes a summary to carry on from.'}</Text>
-        <Box flexDirection="column" marginTop={1}>
-          <Button key="dialog-now" label="Hand off now (clears chat)" hotkey="1" variant="primary" autoFocus onPress={() => chooseFromDialog($, 'now')} />
-          <Button key="dialog-write" label="Just write it" hotkey="2" onPress={() => chooseFromDialog($, 'dry')} />
-          <Button key="dialog-cancel" label="Cancel" hotkey="3" onPress={() => $.ui.close({ id: CHOICE_PANE }).catch(() => undefined)} />
-        </Box>
-      </Box>
-    )
   })
 
   // The card above the prompt.
@@ -588,7 +797,10 @@ export const register: Register = on => {
 
     const last = await read($, lastRequestAt)
     const keep = await read($, isKeepOn)
-    const choosing = await read($, isChoosingHandoff)
+    const handoff = await read($, handoffAtom)
+    const recent = await read($, recentAtom)
+    const hiddenAt = await read($, bannerHiddenAt)
+    const coldHiddenFor = await read($, coldBannerHiddenFor)
     const hidden = await read($, isHidden)
     const shownNow = await read($, nowAtom)
     const message = await read($, note)
@@ -635,7 +847,7 @@ export const register: Register = on => {
               {keep ? 'ON' : 'OFF'}
             </Text>
           </Button>
-          <Button key="create-handoff" label="Create Handoff" onPress={() => update($, isChoosingHandoff, () => true)} />
+          <Button key="create-handoff" label="Create Handoff" onPress={() => startHandoff($)} />
           <Button key="hide-card" label={hidden ? 'Show' : 'Hide'} onPress={() => setHidden($, !hidden)} />
         </Box>
       </Box>
@@ -671,27 +883,130 @@ export const register: Register = on => {
       </Text>
     )
 
-    const card = choosing ? (
-      <Box flexDirection="row" gap={1} flexWrap="wrap">
-        <Text color={C.soon} bold>
-          Create Handoff:
+    const isActive = handoff.phase !== 'idle'
+    const card =
+      hidden || isActive ? (
+        head
+      ) : (
+        <Box flexDirection="column">
+          {head}
+          <Text key="explain" color={C.muted} wrap="wrap">
+            {explain}
+          </Text>
+          {keepLine}
+          <Text key="cost-note" dimColor wrap="wrap">
+            Each ping reads the chat from cache for a small part of the price (5 to 10%). Letting it go cold means writing it all again.
+          </Text>
+        </Box>
+      )
+
+    // The Refresh banner: a cold cache on a chat worth moving, or a context past 250k.
+    const showCold = !isActive && isCold && tokens >= GUARD_MIN_TOKENS && coldHiddenFor !== last
+    const showBig = !isActive && !showCold && tokens >= BANNER_AT && (hiddenAt === 0 || tokens >= hiddenAt + BANNER_STEP)
+    const banner =
+      showCold || showBig ? (
+        <Box key="refresh-banner" flexDirection="row" justifyContent="space-between" flexWrap="wrap" gap={1}>
+          <Text wrap="wrap">
+            <Text color={showCold ? C.cold : C.soon}>{'● '}</Text>
+            {showCold
+              ? `Cache cold on a ${fmtK(tokens)} chat: your next message writes it all again${price ? ` (~${fmtUsd((tokens * price[1]) / 1e6)})` : ''}. Refresh moves this work to a new chat with a full handoff.`
+              : `Context at ${fmtK(tokens)}. Refresh moves this work to a new chat with a full handoff.`}
+          </Text>
+          <Box flexDirection="row" gap={1}>
+            <Button key="banner-refresh" label="Refresh" variant="primary" onPress={() => startHandoff($)} />
+            <Button
+              key="banner-hide"
+              label="Hide"
+              onPress={() => (showCold ? update($, coldBannerHiddenFor, () => last) : update($, bannerHiddenAt, () => tokens))}
+            />
+          </Box>
+        </Box>
+      ) : null
+
+    const stepRow = (label: string, i: number) => {
+      const n = i + 1
+      const done = handoff.step > n
+      const current = handoff.phase === 'running' && handoff.step === n
+      const seconds = Math.floor((now - handoff.writingSince) / 1000)
+      const filled = done ? STEP_CELLS : current ? (n === 4 ? Math.min(STEP_CELLS - 1, 1 + Math.floor(seconds / 4)) : STEP_CELLS / 2) : 0
+      const mark = done ? '✓' : current ? '▸' : handoff.phase === 'failed' && handoff.step === n ? '✗' : '○'
+      const markColor = done ? C.warm : current ? C.accent : handoff.phase === 'failed' && handoff.step === n ? C.cold : C.muted
+
+      return (
+        <Text key={`step-${n}`} wrap="truncate-end">
+          <Text color={markColor}>{`${mark} `}</Text>
+          <Text color={done || current ? undefined : C.muted}>{`${n}. ${label}`.padEnd(34)}</Text>
+          <Text color={done ? C.warm : C.accent}>{'━'.repeat(filled)}</Text>
+          <Text color={C.track}>{'━'.repeat(STEP_CELLS - filled)}</Text>
+          <Text color={C.muted}>{handoff.figures[i] ? `  ${handoff.figures[i]}` : ''}</Text>
         </Text>
-        <Button key="handoff-now" label="Hand off now (clears chat)" variant="primary" onPress={() => runHandoff($, 'now')} />
-        <Button key="handoff-write" label="Just write it" onPress={() => runHandoff($, 'dry')} />
-        <Button key="handoff-cancel" label="Cancel" role="dismiss" onPress={() => update($, isChoosingHandoff, () => false)} />
-      </Box>
-    ) : hidden ? (
-      head
-    ) : (
-      <Box flexDirection="column">
-        {head}
-        <Text key="explain" color={C.muted} wrap="wrap">
-          {explain}
-        </Text>
-        {keepLine}
-        <Text key="cost-note" dimColor wrap="wrap">
-          Each ping reads the chat from cache for a small part of the price (5 to 10%). Letting it go cold means writing it all again.
-        </Text>
+      )
+    }
+
+    const handoffCard = !isActive ? null : (
+      <Box key="handoff-card" flexDirection="column" borderStyle="round" borderColor={handoff.phase === 'failed' ? C.cold : handoff.phase === 'ready' ? C.warm : C.coral} paddingX={1}>
+        <Box flexDirection="row" justifyContent="space-between" flexWrap="wrap" gap={1}>
+          <Text bold color={handoff.phase === 'failed' ? C.cold : handoff.phase === 'ready' ? C.warm : C.coral}>
+            {handoff.phase === 'waiting'
+              ? `⇄ Refreshing: waiting for ${handoff.waitingFor || 'the work under way'}`
+              : handoff.phase === 'running'
+                ? '⇄ Refreshing: building your handoff'
+                : handoff.phase === 'ready'
+                  ? `✓ Handoff ready: ${handoff.words} words`
+                  : '✗ Handoff failed'}
+          </Text>
+          {handoff.phase === 'waiting' || handoff.phase === 'running' ? (
+            <Button key="handoff-cancel" label="Cancel" role="dismiss" onPress={() => cancelHandoff($)} />
+          ) : null}
+        </Box>
+        {handoff.phase === 'waiting' ? (
+          <Text color={C.muted} wrap="wrap">
+            It starts by itself once the work under way has finished, so the handoff reads all of it.
+          </Text>
+        ) : null}
+        {STEPS.map(stepRow)}
+        {handoff.phase === 'failed' ? (
+          <Text color={C.cold} wrap="wrap">
+            {handoff.error}
+          </Text>
+        ) : null}
+        {handoff.phase === 'ready' ? (
+          <Box flexDirection="column">
+            <Text wrap="wrap">
+              <Text color={C.muted}>{'Saved to '}</Text>
+              {handoff.shownPath}
+              <Text color={C.muted}>{' (kept out of git on this machine)'}</Text>
+            </Text>
+            <Text color={C.muted} wrap="wrap">
+              {`Writing it cost ~${fmtUsd(handoff.costUsd)}.${handoff.saving ? ` ${handoff.saving}` : ''}`}
+            </Text>
+          </Box>
+        ) : null}
+        {handoff.phase === 'ready' ? (
+          <Box flexDirection="row" gap={1} flexWrap="wrap" marginTop={1}>
+            <Button key="handoff-new-chat" label="Start new chat with it" variant="primary" onPress={() => startNewChat($)} />
+            <Button key="handoff-copy" label="Copy handoff prompt" onPress={() => copyHandoff($, e.surface)} />
+            <Button key="handoff-open" label="Open file" onPress={() => openFile($, handoff.path)} />
+            <Button key="handoff-recent" label={recent.length ? 'Hide earlier' : 'Earlier handoffs'} onPress={() => toggleRecent($)} />
+            <Button key="handoff-close" label="Close" role="dismiss" onPress={() => cancelHandoff($)} />
+          </Box>
+        ) : null}
+        {handoff.phase === 'failed' ? (
+          <Box flexDirection="row" gap={1} marginTop={1}>
+            <Button key="handoff-retry" label="Try again" variant="primary" onPress={() => startHandoff($)} />
+            <Button key="handoff-close" label="Close" role="dismiss" onPress={() => cancelHandoff($)} />
+          </Box>
+        ) : null}
+        {handoff.phase === 'ready' && recent.length ? (
+          <Box flexDirection="column">
+            <Text color={C.muted}>Earlier handoffs in this project:</Text>
+            {recent.map(name => (
+              <Button key={`recent-${name}`} plain onPress={() => openFile($, `${handoff.path.slice(0, handoff.path.lastIndexOf('/'))}/${name}`)}>
+                <Text color={C.keep}>{`  ${name}`}</Text>
+              </Button>
+            ))}
+          </Box>
+        ) : null}
       </Box>
     )
 
@@ -699,6 +1014,8 @@ export const register: Register = on => {
       <Box flexDirection="column">
         {rest ?? null}
         {card}
+        {banner}
+        {handoffCard}
         {message !== '' && <Text dimColor>{message}</Text>}
       </Box>
     )

@@ -30,7 +30,7 @@
     {
       "name": "cache-handoff",
       "source": "./cache-handoff",
-      "description": "A Cache Clock card above the prompt: the hour the prompt cache stays warm, an always-visible Auto-warm switch that keeps it warm with invisible pings 5 minutes before it expires, dollar estimates, a cold-send guard and a Create Handoff button for ctx-handoff"
+      "description": "A Cache Clock card above the prompt (the hour the prompt cache stays warm, an always-visible Auto-warm switch with invisible pings, dollar estimates, a cold-send guard) and a Handoff: a Refresh banner past 250k or on a cold cache, a five-step progress card, and a ready card that starts a new chat from the saved handoff"
     },
     {
       "name": "replay-button",

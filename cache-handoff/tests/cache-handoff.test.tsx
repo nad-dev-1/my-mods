@@ -1,5 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+import { stampOf } from '../hooks/handoff-logic'
 import { ENGLISH_HANDOFF, ENGLISH_NOTES, isHandoffRequest, isNotesRequest } from '../hooks/register'
 
 const BAND = {
@@ -322,154 +323,348 @@ test('the guard leaves warm chats, small chats, slash commands and prompts nobod
   expect((await $.prompt.submit(typed('small'))).drop).toBeUndefined()
 })
 
-test('Create Handoff asks first, and "Just write it" runs ctx-handoff dry', async ($, on) => {
-  const w = world(on, [
-    { name: 'handoff', description: '', source: 'plugin', plugin: 'ctx-handoff', isFullscreen: false },
-  ])
-  await start($)
-
-  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
-  await ui.press({ key: 'create-handoff' })
-  expect(await ui.find({ type: 'Button', key: 'handoff-now' })).toBeTruthy()
-  expect(await ui.find({ type: 'Button', key: 'handoff-write' })).toBeTruthy()
-  expect(w.runs).toEqual([])
-
-  await ui.press({ key: 'handoff-write' })
-  await w.clock.settle()
-  expect(w.runs).toEqual([{ command: 'handoff', args: 'dry' }])
-  expect(await ui.find({ type: 'Button', key: 'create-handoff' })).toBeTruthy()
-  await ui.unmount()
-})
-
-test('"Hand off now" runs ctx-handoff now, under the name it registered', async ($, on) => {
-  const w = world(on, [
-    { name: 'ctx-handoff', description: '', source: 'plugin', plugin: 'ctx-handoff', isFullscreen: false },
-  ])
-  await start($)
-
-  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
-  await ui.press({ key: 'create-handoff' })
-  await ui.press({ key: 'handoff-now' })
-  await w.clock.settle()
-  expect(w.runs).toEqual([{ command: 'ctx-handoff', args: 'now' }])
-  await ui.unmount()
-})
-
-test('Cancel closes the choice without running anything', async ($, on) => {
-  const w = world(on)
-  await start($)
-
-  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
-  await ui.press({ key: 'create-handoff' })
-  await ui.press({ key: 'handoff-cancel' })
-  expect(w.runs).toEqual([])
-  expect(await ui.find({ type: 'Button', key: 'create-handoff' })).toBeTruthy()
-  await ui.unmount()
-})
-
-test('a slow handoff does not hold the button press', async ($, on) => {
-  const w = world(on, [
-    { name: 'handoff', description: '', source: 'plugin', plugin: 'ctx-handoff', isFullscreen: false },
-  ])
-  // ctx-handoff takes a minute or more to write a handoff.
-  on('command.run', { command: 'handoff' }, async (_: unknown, e: any) => {
-    w.runs.push({ command: e.command, args: e.args })
-    await w.clock.sleep(90 * 1000)
-
-    return { text: '' }
-  })
-  await start($)
-
-  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
-  await ui.press({ key: 'create-handoff' })
-  const pressed = await ui.press({ key: 'handoff-write' })
-  expect(pressed).not.toHaveProperty('deny')
-  await w.clock.settle()
-  expect(w.runs).toEqual([{ command: 'handoff', args: 'dry' }])
-  await ui.unmount()
-})
-
-test('without ctx-handoff the bar says it is needed', async ($, on) => {
-  const w = world(on, [])
-  await start($)
-
-  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
-  await ui.press({ key: 'create-handoff' })
-  await ui.press({ key: 'handoff-write' })
-  expect(w.runs).toEqual([])
-  expect(await ui.find({ type: 'Text', text: /needs the ctx-handoff mod/ })).toBeTruthy()
-  await ui.unmount()
-})
-
 const STATUS_BAR = { plugin: 'cache-handoff', component: 'SessionMode', props: { modes: [] } } as const
-const CHOICE = {
-  plugin: 'cache-handoff',
-  component: 'Pane',
-  requestId: 'cache-handoff-choice',
-  props: { title: 'Handoff', isFocused: true, bodyColumns: 46, placement: 'dock', scroll: { offset: 0, bodyRows: 7 }, view: {} },
-} as const
 const CTX = { name: 'handoff', description: '', source: 'plugin', plugin: 'ctx-handoff', isFullscreen: false }
 
-function dialogs(on: any) {
-  const d = { opens: [] as string[], closes: [] as string[] }
-  on('ui.open', (_: unknown, e: any) => {
-    d.opens.push(e.id)
+const DOC = [
+  'HANDOFF: Acme onboarding pack',
+  'Continue work in /work. Finish the onboarding pack.',
+  '1. Goal and scope',
+  'Ship it.',
+  '2. User constraints and preferences',
+  '"keep it short"',
+  '3. Where it stopped',
+  'Mid-review.',
+  '4. Verified',
+  'None',
+  '5. Done but unverified / discussed only',
+  'None',
+  '6. Tried and failed',
+  'None',
+  '7. Facts found',
+  'None',
+  '8. Tools and environment',
+  'None',
+  '9. Still running or unfinished',
+  'None',
+  '10. Decisions',
+  'None',
+  '11. Next step',
+  'Run the tests.',
+  '12. Questions for the user',
+  'None',
+].join('\n')
 
-    return { value: { isPlaced: true } }
-  })
-  on('ui.close', (_: unknown, e: any) => {
-    d.closes.push(e.id)
+const MESSAGES = [
+  { role: 'user', text: 'Read https://example.com/spec. please', toolUses: [] },
+  {
+    role: 'assistant',
+    text: 'On it.',
+    toolUses: [
+      { tool_use_id: 'a', tool: 'Read', input: { file_path: '/work/a.ts' } },
+      { tool_use_id: 'b', tool: 'Edit', input: { file_path: '/work/b.ts' } },
+      { tool_use_id: 'c', tool: 'Read', input: { file_path: '/work/a.ts' } },
+      { tool_use_id: 'd', tool: 'Skill', input: { skill: 'graphify' } },
+      { tool_use_id: 'e', tool: 'Bash', input: { command: 'ls' } },
+    ],
+  },
+  { role: 'user', text: 'Thanks', toolUses: [] },
+]
+
+const WRITE_USAGE = { input_tokens: 40, output_tokens: 1500, cache_read_input_tokens: 214_000, cache_creation_input_tokens: 0 }
+
+type Desk = {
+  files: Record<string, string>
+  agents: { id: string; status: string }[]
+  copies: string[]
+  opened: string[]
+  listing: { name: string; kind: string; size: number; mtimeMs: number; isLink: boolean }[]
+}
+
+/** The rest of the world a handoff touches: the transcript, files, git, the clipboard, subagents. */
+function desk(on: any, w: World): Desk {
+  const d: Desk = { files: { '/work/.git/info/exclude': '# git ls-files --others --exclude-from=.git/info/exclude\n' }, agents: [], copies: [], opened: [], listing: [] }
+  w.forkAnswers = [{ isAnswered: true, text: DOC, usage: WRITE_USAGE }]
+  on('session.messages', () => ({ value: MESSAGES }))
+  on('session.root', () => ({ value: '/work' }))
+  on('session.cwd', () => ({ value: '/work' }))
+  on('agent.list', () => ({ value: d.agents }))
+  on('command.register', () => ({ value: undefined }))
+  on('fs.write', (_: unknown, e: any) => {
+    d.files[e.path] = e.text
 
     return { value: undefined }
+  })
+  on('fs.read', (_: unknown, e: any) => {
+    if (!(e.path in d.files)) throw new Error(`ENOENT ${e.path}`)
+
+    return { value: d.files[e.path] }
+  })
+  on('fs.list', () => ({ value: d.listing }))
+  on('process.run', (_: unknown, e: any) => {
+    const argv = e.argv as string[]
+    if (argv[0] === 'git') return { value: { exitCode: 0, stdout: '.git/info/exclude\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    d.opened.push(argv.join(' '))
+
+    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('ui.copy', (_: unknown, e: any) => {
+    d.copies.push(e.text)
+
+    return { value: { isCopied: true } }
   })
 
   return d
 }
 
-test('the status-bar Handoff button opens a dialog; "Just write it" runs ctx-handoff dry', async ($, on) => {
-  const w = world(on, [CTX])
-  const d = dialogs(on)
+const STAMP = stampOf(1_000_000)
+const HANDOFF_FILE = `/work/.claude/handoffs/${STAMP}-acme-onboarding-pack.md`
+
+/** Runs a handoff to its end with the card mounted, and gives the card back. */
+async function buildOne($: any, w: World) {
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
+  await ui.press({ key: 'create-handoff' })
+  await w.clock.advance(1)
+
+  return ui
+}
+
+test('Create Handoff runs the five steps and shows a ready card with the figures', async ($, on) => {
+  const w = world(on)
+  const d = desk(on, w)
   await start($)
+  await reply($)
+  const ui = await buildOne($, w)
 
-  const bar = await $.ui.mount({ ...STATUS_BAR, surface: 'terminal' } as any)
-  expect(await bar.find({ type: 'Text', text: /^⇄ Handoff$/ })).toBeTruthy()
-  await bar.press({ key: 'open-handoff' })
-  await w.clock.advance(1)
-  expect(d.opens).toContain('cache-handoff-choice')
-
-  const pane = await $.ui.mount({ ...CHOICE, surface: 'terminal' } as any)
-  await pane.press({ key: 'dialog-write' })
-  await w.clock.advance(1)
-  expect(d.closes).toContain('cache-handoff-choice')
-  expect(w.runs).toEqual([{ command: 'handoff', args: 'dry' }])
-  await pane.unmount()
-  await bar.unmount()
+  const all = await texts(ui)
+  expect(all).toMatch(/Handoff ready: \d+ words/)
+  expect(all).toMatch(/1\. Reading the conversation/)
+  expect(all).toMatch(/3 messages/)
+  expect(all).toMatch(/2 files/)
+  expect(all).toMatch(/1 skill, 1 link/)
+  expect(all).toMatch(/5\. Saving and checking/)
+  expect(all).toMatch(/acme-onboarding-pack\.md/)
+  expect(all).toMatch(/Saved to \.claude\/handoffs\/.*acme-onboarding-pack\.md/)
+  expect(all).toMatch(/Writing it cost ~\$0\.07/)
+  expect(all).toMatch(/Each message in the new chat starts from about/)
+  for (const key of ['handoff-new-chat', 'handoff-copy', 'handoff-open', 'handoff-recent', 'handoff-close']) {
+    expect(await ui.find({ type: 'Button', key })).toBeTruthy()
+  }
+  // The request names the files and links, and asks for the twelve sections in English.
+  const ask = w.forks[0]!
+  expect(ask).toMatch(/twelve numbered sections/)
+  expect(ask).toMatch(/write it all in English/)
+  expect(ask).toContain('- /work/a.ts')
+  expect(ask).toContain('https://example.com/spec')
+  // Saved whole, and the folder kept out of git on this machine.
+  expect(d.files[HANDOFF_FILE]).toBe(`${DOC}\n`)
+  expect(d.files['/work/.git/info/exclude']).toMatch(/\n\.claude\/handoffs\/\n$/)
+  await ui.unmount()
 })
 
-test('a handoff picked while Claude replies starts when the reply ends', async ($, on) => {
-  const w = world(on, [CTX])
-  dialogs(on)
+test('the exclude entry is added once, however many handoffs', async ($, on) => {
+  const w = world(on)
+  const d = desk(on, w)
+  await start($)
+  await reply($)
+  let ui = await buildOne($, w)
+  await ui.press({ key: 'handoff-close' })
+  await ui.unmount()
+  ui = await buildOne($, w)
+  expect(d.files['/work/.git/info/exclude']!.match(/\.claude\/handoffs\//g)).toHaveLength(1)
+  await ui.unmount()
+})
+
+test('the handoff waits for the reply and the subagents under way, and says so', async ($, on) => {
+  const w = world(on)
+  const d = desk(on, w)
   on('turn.step', async function* (_: unknown, e: any) {
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], usage: USAGE }
   })
   await start($)
+  await reply($)
   // A reply under way.
   await (async () => {
     const it = ($ as any).turn.step({ turnId: 't', index: 0, model: 'claude-opus-5-5' })
     if (it && typeof it[Symbol.asyncIterator] === 'function') for await (const _ of it) void _
     else await it
   })()
-
-  const pane = await $.ui.mount({ ...CHOICE, surface: 'terminal' } as any)
-  expect(await pane.find({ type: 'Text', text: /starts when the reply ends/ })).toBeTruthy()
-  await pane.press({ key: 'dialog-now' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
+  await ui.press({ key: 'create-handoff' })
   await w.clock.advance(1)
-  expect(w.runs).toEqual([])
+  expect(await texts(ui)).toMatch(/Refreshing: waiting for Claude's reply/)
+  expect(w.forks).toEqual([])
 
+  d.agents = [{ id: 'x', status: 'running' }]
   await reply($)
   await w.clock.advance(1)
-  expect(w.runs).toEqual([{ command: 'handoff', args: 'now' }])
-  await pane.unmount()
+  expect(await texts(ui)).toMatch(/Refreshing: waiting for 1 subagent to finish/)
+  expect(w.forks).toEqual([])
+
+  d.agents = [{ id: 'x', status: 'completed' }]
+  await w.clock.advance(2000)
+  expect(await texts(ui)).toMatch(/Handoff ready/)
+  expect(w.forks).toHaveLength(1)
+  await ui.unmount()
+})
+
+test('Start new chat clears, then fills the prompt with the handoff and what was typed meanwhile, without sending', async ($, on) => {
+  const w = world(on)
+  desk(on, w)
+  await start($)
+  await reply($)
+  const ui = await buildOne($, w)
+  w.box = 'also check the logs'
+  await ui.press({ key: 'handoff-new-chat' })
+  await w.clock.advance(1)
+  expect(w.runs).toEqual([{ command: 'clear', args: '' }])
+  expect(w.box).toBe(`${DOC}\n\nalso check the logs`)
+  expect(w.sent).toEqual([])
+  expect(await ui.find({ type: 'Button', key: 'handoff-new-chat' })).toBeFalsy()
+  await ui.unmount()
+})
+
+test('Copy puts the handoff on the clipboard; Open file opens the saved file', async ($, on) => {
+  const w = world(on)
+  const d = desk(on, w)
+  await start($)
+  await reply($)
+  const ui = await buildOne($, w)
+  await ui.press({ key: 'handoff-copy' })
+  expect(d.copies).toEqual([DOC])
+  expect(await texts(ui)).toMatch(/Copied the handoff prompt/)
+  await ui.press({ key: 'handoff-open' })
+  expect(d.opened).toEqual([`open ${HANDOFF_FILE}`])
+  await ui.unmount()
+})
+
+test('Earlier handoffs lists this project\'s others, newest first', async ($, on) => {
+  const w = world(on)
+  const d = desk(on, w)
+  await start($)
+  await reply($)
+  const ui = await buildOne($, w)
+  d.listing = [
+    { name: '2026-10-01-0900-old.md', kind: 'file', size: 1, mtimeMs: 1, isLink: false },
+    { name: `${STAMP}-acme-onboarding-pack.md`, kind: 'file', size: 1, mtimeMs: 9, isLink: false },
+    { name: '2026-10-02-0900-newer.md', kind: 'file', size: 1, mtimeMs: 2, isLink: false },
+    { name: 'notes.txt', kind: 'file', size: 1, mtimeMs: 3, isLink: false },
+  ]
+  await ui.press({ key: 'handoff-recent' })
+  const all = await texts(ui)
+  expect(all).toMatch(/Earlier handoffs in this project/)
+  expect(all.indexOf('newer.md')).toBeLessThan(all.indexOf('old.md'))
+  expect(all).not.toMatch(/notes\.txt/)
+  await ui.press({ key: 'recent-2026-10-01-0900-old.md' })
+  expect(d.opened).toEqual(['open /work/.claude/handoffs/2026-10-01-0900-old.md'])
+  await ui.unmount()
+})
+
+test('a handoff the model could not write fails with the reason and a Try again', async ($, on) => {
+  const w = world(on)
+  desk(on, w)
+  await start($)
+  await reply($)
+  w.forkAnswers = [{ isAnswered: true, text: 'Sorry, I cannot.', usage: WRITE_USAGE }]
+  const ui = await buildOne($, w)
+  expect(await texts(ui)).toMatch(/Handoff failed/)
+  expect(await texts(ui)).toMatch(/does not start with a HANDOFF: line/)
+  w.forkAnswers = [{ isAnswered: true, text: DOC, usage: WRITE_USAGE }]
+  await ui.press({ key: 'handoff-retry' })
+  await w.clock.advance(1)
+  expect(await texts(ui)).toMatch(/Handoff ready/)
+  await ui.unmount()
+})
+
+test('/handoff-new starts the same flow, and Cancel drops it', async ($, on) => {
+  const w = world(on)
+  desk(on, w)
+  on('turn.step', async function* (_: unknown, e: any) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], usage: USAGE }
+  })
+  await start($)
+  await reply($)
+  await (async () => {
+    const it = ($ as any).turn.step({ turnId: 't', index: 0, model: 'claude-opus-5-5' })
+    if (it && typeof it[Symbol.asyncIterator] === 'function') for await (const _ of it) void _
+    else await it
+  })()
+  const r = await ($ as any).command.run({ command: 'handoff-new', args: '' })
+  expect(r.text).toMatch(/Building a handoff/)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
+  await w.clock.advance(1)
+  expect(await texts(ui)).toMatch(/Refreshing: waiting/)
+  await ui.press({ key: 'handoff-cancel' })
+  await reply($)
+  await w.clock.advance(3000)
+  expect(w.forks).toEqual([])
+  expect(await texts(ui)).not.toMatch(/Refreshing/)
+  await ui.unmount()
+})
+
+test('past 250k a Refresh banner shows; Hide keeps it away until 50k more', async ($, on) => {
+  const w = world(on)
+  desk(on, w)
+  w.ctxTokens = 240_000
+  await start($)
+  await reply($)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
+  expect(await ui.find({ type: 'Button', key: 'banner-refresh' })).toBeFalsy()
+  w.ctxTokens = 262_000
+  await w.clock.advance(1000)
+  expect(await texts(ui)).toMatch(/Context at 262k\. Refresh moves this work to a new chat with a full handoff\./)
+  await ui.press({ key: 'banner-hide' })
+  expect(await ui.find({ type: 'Button', key: 'banner-refresh' })).toBeFalsy()
+  w.ctxTokens = 300_000
+  await w.clock.advance(1000)
+  expect(await ui.find({ type: 'Button', key: 'banner-refresh' })).toBeFalsy()
+  w.ctxTokens = 313_000
+  await w.clock.advance(1000)
+  expect(await ui.find({ type: 'Button', key: 'banner-refresh' })).toBeTruthy()
+  await ui.press({ key: 'banner-refresh' })
+  await w.clock.advance(1)
+  expect(await texts(ui)).toMatch(/Handoff ready/)
+  await ui.unmount()
+})
+
+test('a cold cache on a chat of 50k or more shows the banner with the re-send price', async ($, on) => {
+  const w = world(on)
+  desk(on, w)
+  await start($)
+  await reply($)
+  await w.clock.advance(61 * MIN)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
+  expect(await texts(ui)).toMatch(/Cache cold on a 214k chat: your next message writes it all again \(~\$1\.71\)\. Refresh moves/)
+  await ui.press({ key: 'banner-hide' })
+  expect(await ui.find({ type: 'Button', key: 'banner-refresh' })).toBeFalsy()
+  await ui.unmount()
+})
+
+test('the status-bar Handoff button starts the handoff directly', async ($, on) => {
+  const w = world(on)
+  desk(on, w)
+  await start($)
+  await reply($)
+  const bar = await $.ui.mount({ ...STATUS_BAR, surface: 'terminal' } as any)
+  expect(await bar.find({ type: 'Text', text: /^⇄ Handoff$/ })).toBeTruthy()
+  await bar.press({ key: 'open-handoff' })
+  await bar.unmount()
+  await w.clock.advance(1)
+  expect(w.forks).toHaveLength(1)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' } as any)
+  expect(await texts(ui)).toMatch(/Handoff ready/)
+  await ui.unmount()
+})
+
+test('ctx-handoff\'s own keep-warm refresh is switched off once', async ($, on) => {
+  const w = world(on, [CTX])
+  desk(on, w)
+  await start($)
+  await w.clock.advance(1)
+  expect(w.runs).toEqual([{ command: 'handoff', args: 'refresh off' }])
+  await start($)
+  await w.clock.advance(1)
+  expect(w.runs).toHaveLength(1)
 })
 
 const HANDOFF_ZH = '為接手這段工作的新對話寫一份 handoff。\n第一行寫「HANDOFF:」加一句話的目標。\n用使用者在對話裡使用的語言撰寫；程式碼、指令、路徑與錯誤訊息維持原文。'
