@@ -449,13 +449,12 @@ export const register: Register = on => {
     return r
   }).catch(($, e, next) => next(e))
 
-  // The footer: the live session bar on three lines, as ccstatusline drew
-  // them, with the Control Tools button at the end of the first.
-  on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
-    const { Box, Button, Text } = $.ui.resolve(e)
-    const below = await next(e)
+  // The live session bar, three lines as ccstatusline drew them, under the
+  // engine's own hint line (kept live), so it starts at the left edge.
+  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
+    const { Box, Text } = $.ui.resolve(e)
+    const hint = await next(e)
     await read($, tick)
-    const open = await read($, isOpen)
     const picks = await read($, main)
     const s = await read($, sub)
     const t = await read($, tokens)
@@ -480,7 +479,6 @@ export const register: Register = on => {
     const style = await $.settings.read({ key: 'outputStyle' as never }).catch(() => undefined)
     const total = t.input + t.output + t.cacheRead + t.cacheWrite
     const subText = subLabel(s)
-    const modes = e.props.modes
 
     /** One labelled figure: a dim label, then the value in colour. */
     const seg = (key: string, label: string, value: string, color: string, bold = true) => (
@@ -515,23 +513,6 @@ export const register: Register = on => {
         </Text>
       )
     }
-
-    const button = (
-      <Button
-        key="open-controls"
-        plain
-        label={open ? 'Close Control Tools' : 'Open Control Tools'}
-        onPress={async () => {
-          // Opened within the press, so it counts as asked for.
-          if (await read($, isOpen)) await closePanel($)
-          else await openPanel($)
-        }}
-      >
-        <Text backgroundColor={open ? C.orange : C.chip} color={open ? C.white : C.orange} bold>
-          {` ◆ Control Tools ${open ? '∨' : '∧'} `}
-        </Text>
-      </Button>
-    )
 
     const line1 = line(
       'line-1',
@@ -596,20 +577,40 @@ export const register: Register = on => {
       seg('seg-style', 'style', typeof style === 'string' && style ? style : 'default', C.text, false),
     ])
 
-    // The status lines on the left; every mod's button, this one's first, in
-    // the grid to their right.
-    const statusLeft = (
-      <Box key="status-left" flexDirection="column" flexShrink={1}>
+    return (
+      <Box key="status-hint" flexDirection="column">
+        {hint as ReturnType<typeof seg>}
         {line1}
         {line2}
         {line3}
       </Box>
     )
+  })
 
-    // No width of our own: the bar takes the room the footer gives it (the
-    // engine's notices hold the footer's left part), the grid keeps its size
-    // at the right end and the status lines are cut short instead.
-    return statusGrid({ Box, Text }, below, modes, button, statusLeft) as ReturnType<typeof seg>
+  // The status bar's own place, to the right of the hint line: every mod's
+  // button, this one first, in the shared grid at the right edge.
+  on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+    const { Box, Button, Text } = $.ui.resolve(e)
+    const below = await next(e)
+    const open = await read($, isOpen)
+    const button = (
+      <Button
+        key="open-controls"
+        plain
+        label={open ? 'Close Control Tools' : 'Open Control Tools'}
+        onPress={async () => {
+          // Opened within the press, so it counts as asked for.
+          if (await read($, isOpen)) await closePanel($)
+          else await openPanel($)
+        }}
+      >
+        <Text backgroundColor={open ? C.orange : C.chip} color={open ? C.white : C.orange} bold>
+          {` ◆ Control Tools ${open ? '∨' : '∧'} `}
+        </Text>
+      </Button>
+    )
+
+    return statusGrid({ Box, Text }, below, e.props.modes, button) as never
   })
 
   // The panel.

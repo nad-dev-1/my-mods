@@ -4,7 +4,7 @@ A Claude Code mod that switches the model and effort level without typing `/mode
 
 ## Using it
 
-The footer under the prompt shows a live session bar on three lines (everything ccstatusline showed, so it can replace it), with the **◆ Control Tools ∧** button at the end of the first:
+Under the prompt, from the left edge and below Claude Code's own hint line, a live session bar shows three lines (everything ccstatusline showed, so it can replace it). The status bar to its right holds every mod's button in a three-row grid at the right edge, **◆ Control Tools ∧** first:
 
 ```
 ◆ Subscription │ ◆ Opus 5.5 │ effort high │ ctx ▰▰▱▱▱▱▱▱▱▱ 18% · 36.4k │ ◇ 0 agents │ sub Haiku/low   ◆ Control Tools ∧

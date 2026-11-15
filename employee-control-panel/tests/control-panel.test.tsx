@@ -4,6 +4,7 @@ const PLUGIN = 'employee-control-panel'
 const PANE_ID = 'control-tools'
 
 const STATUS_BAR = { plugin: PLUGIN, component: 'SessionMode', props: { modes: [] } } as const
+const HINT = { plugin: PLUGIN, component: 'PromptHint', props: { isDraft: false, isWorking: false, hint: '? for shortcuts' } } as const
 const PANE = {
   plugin: PLUGIN,
   component: 'Pane',
@@ -113,13 +114,16 @@ async function openPanel($: any, w: World) {
   return $.ui.mount({ ...PANE, surface: 'terminal' } as any)
 }
 
-/** Whether the footer row's text, every piece joined, matches `re`. */
+/** Whether the footer's text (hint line with the status, then the bar), every piece joined, matches `re`. */
 async function barHas($: any, re: RegExp): Promise<boolean> {
-  const bar = await $.ui.mount({ ...STATUS_BAR, surface: 'terminal' } as any)
-  const texts = (await bar.findAll({ type: 'Text' })).map((t: any) => t.text ?? '').join(' ')
-  await bar.unmount()
+  const texts: string[] = []
+  for (const site of [HINT, STATUS_BAR]) {
+    const m = await $.ui.mount({ ...site, surface: 'terminal' } as any)
+    texts.push(...(await m.findAll({ type: 'Text' })).map((t: any) => t.text ?? ''))
+    await m.unmount()
+  }
 
-  return re.test(texts)
+  return re.test(texts.join(' '))
 }
 
 for (const surface of ['terminal', 'desktop'] as const) {
@@ -408,8 +412,7 @@ test('every mod\'s button sits in a 3-row grid, in a fixed order, and still answ
   expect(await bar.find({ type: 'Box', key: 'status-grid-col-0' })).toBeTruthy()
   expect(await bar.find({ type: 'Box', key: 'status-grid-col-1' })).toBeTruthy()
   expect(await bar.find({ type: 'Box', key: 'status-grid-col-2' })).toBeFalsy()
-  // The status lines stay on the left, and the modes are drawn once.
-  expect(await bar.find({ type: 'Box', key: 'status-left' })).toBeTruthy()
+  // The modes are drawn once.
   const texts = (await bar.findAll({ type: 'Text' })).map((t: any) => t.text ?? '').join('|')
   expect(texts.split('focus').length - 1).toBe(1)
   // A regrouped button still answers its own mod.
@@ -431,10 +434,19 @@ test('the status lines hold the left edge and the buttons the right edge of the 
   expect(props.justifyContent).toBe('space-between')
   const boxes = (await bar.findAll({ type: 'Box' })).map((b: any) => b.key ?? b.props?.key)
   expect(boxes.indexOf('status-left-side')).toBeLessThan(boxes.indexOf('status-grid'))
-  // Each status line is one Text that is cut at its end when short of room,
-  // never broken into a column of fragments.
-  const texts: any[] = await bar.findAll({ type: 'Text' })
-  const cut = texts.filter(t => (t.props ?? t).wrap === 'truncate-end')
-  expect(cut.length).toBeGreaterThanOrEqual(3)
   await bar.unmount()
+
+  // The status lines sit under the engine's hint line, from the left edge:
+  // each one Text cut at its end when short of room, never broken apart.
+  const hint = await $.ui.mount({ ...HINT, surface: 'terminal' } as any)
+  expect(await hint.find({ type: 'Box', key: 'status-hint' })).toBeTruthy()
+  const texts: any[] = await hint.findAll({ type: 'Text' })
+  expect(texts.filter(t => (t.props ?? t).wrap === 'truncate-end').length).toBeGreaterThanOrEqual(3)
+  expect(texts.map(t => t.text ?? '').join(' ')).toMatch(/◆ Opus 5\.5/)
+  // The bar itself holds the buttons only.
+  const bar2 = await $.ui.mount({ ...STATUS_BAR, surface: 'terminal' } as any)
+  expect(await bar2.find({ type: 'Text', text: /Opus 5\.5/ })).toBeFalsy()
+  expect(await bar2.find({ type: 'Button', key: 'open-controls' })).toBeTruthy()
+  await bar2.unmount()
+  await hint.unmount()
 })
