@@ -1,0 +1,10 @@
+{
+  "name": "jira-session-tracker",
+  "version": "0.1.0",
+  "description": "A Jira pane beside the chat that follows every Claude Code session on this machine, links the work to tickets, proposes time and status moves, and writes to Jira only after you confirm.",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "nad-dev-1"
+  },
+  "license": "MIT"
+}

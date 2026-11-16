@@ -15,10 +15,11 @@ Claude Code mods: plugins with a hooks module that change what Claude Code does 
 | [`inject-prompt/`](inject-prompt/) | An Inject button in the status bar that opens your saved prompts, grouped by category and filterable by tag or search, and inserts the ones you pick at the cursor |
 | [`git-review/`](git-review/) | A Git Review button that lists your GitLab merge requests by project and starts a full review of one in a new terminal: conflicts, worktree, pipelines and scans, Sonar, and the project's own code review |
 | [`employee-control-panel/`](employee-control-panel/) | A Control Tools button in the status bar that opens a panel to switch the model and effort level for Claude and its subagents, with a live status line |
+| [`jira-session-tracker/`](jira-session-tracker/) | A ◷ Jira button and side pane that follow every Claude Code session on your machine, group unlinked work by folder, and link it to Jira tickets, create tickets, log time and move statuses, writing to Jira only after you confirm a preview. [User guide](docs/jira-session-tracker.md) |
 
 ## Guides
 
-- [Jira Session Tracker](docs/jira-session-tracker.md): usage and features of the personal Jira mod (the mod itself is not in this repository yet).
+- [Jira Session Tracker](docs/jira-session-tracker.md): usage and features of the personal Jira mod.
 
 ## Install
 

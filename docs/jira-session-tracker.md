@@ -4,7 +4,7 @@ A personal Claude Code mod that follows every Claude Code session on your machin
 
 **Nothing is written to Jira, and no git branch is renamed, until you confirm it on a preview screen.**
 
-> The mod's code is not in this repository yet. This page describes how it works and what it offers.
+> Install: `claude plugin marketplace add nad-dev-1/my-mods`, then `claude plugin install jira-session-tracker@my-mods --scope user`. The code is in [`jira-session-tracker/`](../jira-session-tracker/).
 
 ---
 
