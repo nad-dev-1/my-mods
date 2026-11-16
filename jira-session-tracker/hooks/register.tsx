@@ -1597,9 +1597,9 @@ async function drawBody($: E$, el: El, c: Ctx) {
 
 /** Hours for the day strip: 2, 1.5, 0. */
 function hrs(min: number): string {
-  const h = Math.round((min / 60) * 10) / 10
+  const hours = Math.round((min / 60) * 10) / 10
 
-  return Number.isInteger(h) ? String(h) : h.toFixed(1)
+  return Number.isInteger(hours) ? String(hours) : hours.toFixed(1)
 }
 
 function lastPart(path: string): { name: string; parent: string } {

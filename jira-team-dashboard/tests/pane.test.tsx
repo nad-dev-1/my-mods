@@ -70,6 +70,9 @@ function world(on: any, slowMs = 0, timeouts = 0): World {
         return text({ issues: { nodes: [issue('APP-2')] } })
       }
 
+      // An active-sprint ticket with no estimate: a sprint hygiene item.
+      if (jql.includes('openSprints()') && jql.includes('originalEstimate is EMPTY')) return text({ issues: { nodes: [issue('APP-7')] } })
+
       return text({ issues: { nodes: [] } })
     }
     if (e.tool === 'executeRead') {
@@ -114,6 +117,9 @@ test('/team pulls today from Jira, read-only, and draws every section', async ($
     for (const key of ['sec-cards', 'sec-live', 'sec-devs', 'sec-projects', 'sec-flutter', 'sec-attention', 'sec-timeline']) expect(await ui.find({ type: 'Button', key })).toBeTruthy()
     expect(await ui.find({ type: 'Text', text: /^3\.0h$/ })).toBeTruthy()
     expect(await ui.find({ type: 'Text', text: /^Ada Lane$/ })).toBeTruthy()
+    // Sprint hygiene items draw (a list item once hid the drawing helper and blanked the pane).
+    expect(await ui.find({ type: 'Text', text: /^APP-7$/ })).toBeTruthy()
+    expect(await ui.find({ type: 'Text', text: /no estimate/ })).toBeTruthy()
     await ui.unmount()
   }
 })

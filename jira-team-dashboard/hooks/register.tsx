@@ -349,11 +349,11 @@ async function collectDay($: E$, day: string, progress: (text: string) => Promis
   })
   const hygiene = new Map<string, Hygiene>()
   checks.forEach(([reason], i) => {
-    for (const h of checked[i] ?? []) {
-      const p = toPlain(h, byAccount)
-      const cur = hygiene.get(h.key) ?? { key: h.key, summary: h.summary, project: h.project, assignee: p.assignee, reasons: [] }
+    for (const hit of checked[i] ?? []) {
+      const p = toPlain(hit, byAccount)
+      const cur = hygiene.get(hit.key) ?? { key: hit.key, summary: hit.summary, project: hit.project, assignee: p.assignee, reasons: [] }
       cur.reasons.push(reason)
-      hygiene.set(h.key, cur)
+      hygiene.set(hit.key, cur)
     }
   })
 
@@ -952,7 +952,7 @@ async function drawMain($: E$, el: El, x: DashUi, cfg: TeamCfg, W: number, worki
           part('stuck', 'Stuck tickets', a.stuck.map(s => <Text key={`as-${s.issue.key}`}>  <Text color={C.accent}>{s.issue.key}</Text> {name(cfg, s.issue.assignee)} <Text dimColor>· {s.reason}</Text></Text>)),
           part('notime', 'Work but no time', a.noTime.map(m => <Text key={`an-${m.email}-${m.key}`}>  <Text color={C.accent}>{m.key}</Text> moved by {name(cfg, m.email)} <Text dimColor>· {m.from} → {m.to}</Text></Text>)),
           part('est', 'Estimate vs actual', a.estimate.map(i => <Text key={`ae-${i.key}`}>  <Text color={C.accent}>{i.key}</Text> {fmtMin(i.spentSec / 60)} spent of {fmtMin(i.estimateSec / 60)} <Text dimColor>· {name(cfg, i.assignee)}</Text></Text>)),
-          part('hyg', 'Sprint hygiene', a.hygiene.map(h => <Text key={`ah-${h.key}`}>  <Text color={C.accent}>{h.key}</Text> <Text dimColor>{h.reasons.join(', ')} · {fit(h.summary, W - 40)}</Text></Text>)),
+          part('hyg', 'Sprint hygiene', a.hygiene.map(item => <Text key={`ah-${item.key}`}>  <Text color={C.accent}>{item.key}</Text> <Text dimColor>{item.reasons.join(', ')} · {fit(item.summary, W - 40)}</Text></Text>)),
           part('bounce', 'Bounce-backs (a gentle signal, not a score)', a.bounces.map(b => <Text key={`ab-${b.member.email}`}>  {b.member.name} {b.count} <Text dimColor>· {b.keys.join(', ')}</Text></Text>)),
           attentionLines(v)[0] === 'Nothing needs attention.' ? <Text dimColor>Nothing needs attention.</Text> : null,
         ]
