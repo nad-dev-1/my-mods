@@ -41,7 +41,8 @@ const issue = (key: string, extra: Record<string, unknown> = {}) => ({
 
 type World = { files: Record<string, string>; tools: string[]; ops: string[]; clock: ReturnType<typeof mock.clock> }
 
-function world(on: any, slowMs = 0): World {
+function world(on: any, slowMs = 0, timeouts = 0): World {
+  let timeoutsLeft = timeouts
   const w: World = { files: { '/Users/me/.claude/jira-team-dashboard/team.json': JSON.stringify(CFG) }, tools: [], ops: [], clock: mock.clock(on, { now: NOW }) }
   mock.store(on)
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
@@ -74,6 +75,11 @@ function world(on: any, slowMs = 0): World {
     if (e.tool === 'executeRead') {
       w.ops.push(String(args.name))
       if (args.name === 'listJiraIssueWorklogs') {
+        if (timeoutsLeft > 0) {
+          timeoutsLeft -= 1
+
+          return { value: { content: [{ type: 'text', text: 'The operation timed out.' }], isError: true } }
+        }
         return text({ data: { total: 1, isLast: true, worklogs: [{ id: '9', author: { accountId: 'a1' }, started: '2026-11-10T10:00:00.000+0100', timeSpentSeconds: 3 * 3600 }] } })
       }
 
@@ -182,4 +188,16 @@ test('Pull from Jira pressed while a pull runs is queued, not lost; progress sho
   // Today once, then the six missing days: nothing pulled twice.
   expect(await ui.find({ type: 'Text', text: /^Pulled 7 days at/ })).toBeTruthy()
   await ui.unmount()
+})
+
+test('a Jira call that times out is tried again: the hours are kept and no error is left', async ($, on) => {
+  const w = world(on, 0, 1)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'team' } as never)
+  await w.clock.advance(10_000)
+
+  const snap = JSON.parse(w.files['/Users/me/.claude/jira-team-dashboard/snapshots/2026-11-10.json']!)
+  expect(snap.errors).toEqual([])
+  expect(snap.worklogs.map((x: any) => [x.key, x.seconds])).toEqual([['APP-2', 3 * 3600]])
+  expect(w.ops.filter(o => o === 'listJiraIssueWorklogs').length).toBe(2)
 })

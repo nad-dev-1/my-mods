@@ -221,6 +221,21 @@ function toPlain(i: RawIssue, byAccount: Map<string, string>): Issue {
   }
 }
 
+/** Jira calls that time out or hit a rate limit usually pass on a second try. */
+const PASSING = /timed out|timeout|ETIMEDOUT|ECONNRESET|socket hang up|rate limit|too many requests|429|503|502/i
+
+async function retry<T>($: E$, fn: () => Promise<T>, tries = 3): Promise<T> {
+  for (let i = 1; ; i++) {
+    try {
+      return await fn()
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (i >= tries || !PASSING.test(msg)) throw err
+      await $.clock.sleep(1500 * i)
+    }
+  }
+}
+
 async function collectDay($: E$, day: string, progress: (text: string) => Promise<void>): Promise<Snapshot> {
   await progress('finding the team in Jira')
   const cfg = await resolveMembers($, await loadCfg($))
@@ -250,10 +265,10 @@ async function collectDay($: E$, day: string, progress: (text: string) => Promis
   // The four searches of the day, side by side.
   await progress('searching worklogs, moves, new and open tickets')
   const [logged, changed, createdRaw, openRaw] = await Promise.all([
-    step('worklogs', () => jiraSearch($, cloud, `${pc}worklogAuthor in (${who}) AND worklogDate = "${day}"`, 200, { fields: FIELDS.plain, page: 50 }), none),
-    step('status moves', () => jiraSearch($, cloud, `${pc}status CHANGED DURING ("${day}", "${d2}")${scope}`, 150, { fields: FIELDS.plain, page: 50 }), none),
-    step('created', () => jiraSearch($, cloud, `${pc}created >= "${day}" AND created < "${d2}" AND (reporter in (${who}) OR assignee in (${who}))`, 100, { fields: FIELDS.all, page: 10 }), none),
-    step('open tickets', () => jiraSearch($, cloud, `${pc}assignee in (${who}) AND statusCategory != Done ORDER BY updated DESC`, 250, { fields: FIELDS.open, page: 25 }), none),
+    step('worklogs', () => retry($, () => jiraSearch($, cloud, `${pc}worklogAuthor in (${who}) AND worklogDate = "${day}"`, 200, { fields: FIELDS.plain, page: 50 })), none),
+    step('status moves', () => retry($, () => jiraSearch($, cloud, `${pc}status CHANGED DURING ("${day}", "${d2}")${scope}`, 150, { fields: FIELDS.plain, page: 50 })), none),
+    step('created', () => retry($, () => jiraSearch($, cloud, `${pc}created >= "${day}" AND created < "${d2}" AND (reporter in (${who}) OR assignee in (${who}))`, 100, { fields: FIELDS.all, page: 10 })), none),
+    step('open tickets', () => retry($, () => jiraSearch($, cloud, `${pc}assignee in (${who}) AND statusCategory != Done ORDER BY updated DESC`, 600, { fields: FIELDS.open, page: 25 })), none),
   ])
   const open = openRaw.map(i => toPlain(i, byAccount))
 
@@ -267,8 +282,8 @@ async function collectDay($: E$, day: string, progress: (text: string) => Promis
   const worklogs: WL[] = []
   const moves: Move[] = []
   await Promise.all([
-    inBatches(logged, 4, async issue => {
-      const list = await step(`worklogs of ${issue.key}`, () => jiraWorklogs($, cloud, issue.key, s0, s1), [])
+    inBatches(logged, 3, async issue => {
+      const list = await step(`worklogs of ${issue.key}`, () => retry($, () => jiraWorklogs($, cloud, issue.key, s0, s1)), [])
       for (const w of list) {
         const email = byAccount.get(w.accountId)
         if (!email || w.started < s0 || w.started >= s1) continue
@@ -288,8 +303,8 @@ async function collectDay($: E$, day: string, progress: (text: string) => Promis
       }
       await tick()
     }),
-    inBatches(changed, 4, async issue => {
-      const list = await step(`history of ${issue.key}`, () => jiraStatusMoves($, cloud, issue.key), [])
+    inBatches(changed, 3, async issue => {
+      const list = await step(`history of ${issue.key}`, () => retry($, () => jiraStatusMoves($, cloud, issue.key)), [])
       for (const m of list) {
         const email = byAccount.get(m.accountId)
         if (!email || m.at < s0 || m.at >= s1) continue
@@ -312,8 +327,8 @@ async function collectDay($: E$, day: string, progress: (text: string) => Promis
       ]
     : []
   const [children, ...checked] = await Promise.all([
-    parents.length ? step('stories', () => jiraSearch($, cloud, `parent in (${parents.join(', ')})`, 400, { fields: FIELDS.progress, page: 100 }), none) : Promise.resolve(none),
-    ...checks.map(([reason, jql]) => step(`sprint check (${reason})`, () => jiraSearch($, cloud, jql, 60, { fields: [...FIELDS.plain, 'assignee'], page: 20 }), none)),
+    parents.length ? step('stories', () => retry($, () => jiraSearch($, cloud, `parent in (${parents.join(', ')})`, 400, { fields: FIELDS.progress, page: 100 })), none) : Promise.resolve(none),
+    ...checks.map(([reason, jql]) => step(`sprint check (${reason})`, () => retry($, () => jiraSearch($, cloud, jql, 60, { fields: [...FIELDS.plain, 'assignee'], page: 20 })), none)),
   ])
   const stories: StoryInfo[] = parents.map(key => {
     const kids = children.filter(c => c.parent === key)

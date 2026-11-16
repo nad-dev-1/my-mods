@@ -1,6 +1,6 @@
 {
   "name": "jira-team-dashboard",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "A Team pane for the team lead: what the team moved and logged in Jira each day, by team, developer, project and story, with gaps, stuck tickets, a Flutter split, trends, exports and a weekly digest. Read-only: it never writes to Jira.",
   "author": {
     "name": "nad-dev-1"
