@@ -120,12 +120,17 @@ function toIssue(node: Json): RawIssue {
   }
 }
 
-/** JQL search, paged up to `max` issues. */
+/**
+ * JQL search, paged up to `max` issues. Each issue's answer is several KB (user
+ * avatars and all), and an answer too large for a mod arrives cut off and
+ * unreadable: so pages start small and halve whenever one comes back cut.
+ */
 export async function search($: E$, cloudId: string, jql: string, max = 100): Promise<RawIssue[]> {
   const out: RawIssue[] = []
   let token = ''
+  let size = 20
   while (out.length < max) {
-    const args: Json = { cloudId, jql, fields: ISSUE_FIELDS, maxResults: Math.min(100, max - out.length) }
+    const args: Json = { cloudId, jql, fields: ISSUE_FIELDS, maxResults: Math.min(size, max - out.length) }
     if (token) args.nextPageToken = token
     let r: Json
     try {
@@ -134,6 +139,13 @@ export async function search($: E$, cloudId: string, jql: string, max = 100): Pr
       // A later page that fails (some JQL cannot be paged) keeps what came back.
       if (out.length > 0) break
       throw err
+    }
+    if (typeof r.text === 'string' && r.issues === undefined) {
+      if (size > 2) {
+        size = Math.max(2, Math.floor(size / 2))
+        continue
+      }
+      throw new Error(`Jira's answer for "${jql.slice(0, 60)}" was too large to read`)
     }
     const issues = asObj(r.issues)
     const nodes = (Array.isArray(issues.nodes) ? issues.nodes : Array.isArray(r.issues) ? r.issues : []) as Json[]

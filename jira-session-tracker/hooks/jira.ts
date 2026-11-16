@@ -84,14 +84,32 @@ function toTicket(node: Json): Ticket {
   }
 }
 
-/** JQL search, paged up to `max` issues. */
+/**
+ * JQL search, paged up to `max` issues. An answer too large for a mod arrives
+ * cut off and unreadable: so pages start small and halve whenever one comes
+ * back cut.
+ */
 export async function search($: E$, cloudId: string, jql: string, max = 100, fields = TICKET_FIELDS): Promise<Ticket[]> {
   const out: Ticket[] = []
   let token = ''
+  let size = 25
   while (out.length < max) {
-    const args: Json = { cloudId, jql, fields, maxResults: Math.min(100, max - out.length) }
+    const args: Json = { cloudId, jql, fields, maxResults: Math.min(size, max - out.length) }
     if (token) args.nextPageToken = token
-    const r = await call($, 'searchJiraIssuesUsingJql', args)
+    let r: Json
+    try {
+      r = await call($, 'searchJiraIssuesUsingJql', args)
+    } catch (err) {
+      if (out.length > 0) break
+      throw err
+    }
+    if (typeof r.text === 'string' && r.issues === undefined) {
+      if (size > 2) {
+        size = Math.max(2, Math.floor(size / 2))
+        continue
+      }
+      throw new Error(`Jira's answer for "${jql.slice(0, 60)}" was too large to read`)
+    }
     const issues = asObj(r.issues)
     const nodes = (Array.isArray(issues.nodes) ? issues.nodes : Array.isArray(r.issues) ? r.issues : []) as Json[]
     out.push(...nodes.map(toTicket))

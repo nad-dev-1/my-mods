@@ -62,7 +62,11 @@ function world(on: any): World {
       const jql: string = args.jql
       if (jql.startsWith('assignee = "ada@example.com"')) return text({ issues: { nodes: [issue('APP-1')] } })
       if (jql.includes('worklogDate')) return text({ issues: { nodes: [issue('APP-2')] } })
-      if (jql.includes('statusCategory != Done')) return text({ issues: { nodes: [issue('APP-2')] } })
+      if (jql.includes('statusCategory != Done')) {
+        // Like the real connection: a big page arrives cut off and cannot be read.
+        if (args.maxResults > 5) return { value: { content: [{ type: 'text', text: '{"issues":{"nodes":[{"key":"APP-2","fiel' }], isError: false } }
+        return text({ issues: { nodes: [issue('APP-2')] } })
+      }
 
       return text({ issues: { nodes: [] } })
     }
@@ -130,5 +134,29 @@ test('team filter, the leave calendar and a reminder draft', async ($, on) => {
   await ui.press({ key: 'su-save' })
   expect(await ui.find({ type: 'Button', key: 'agr-cy@example.com' })).toBeFalsy()
   expect(JSON.parse(w.files['/Users/me/.claude/jira-team-dashboard/team.json']!).leave).toEqual({ 'cy@example.com': ['2026-11-10'] })
+  await ui.unmount()
+})
+
+test('a cut-off answer is retried in smaller pages; settings changed elsewhere are read again', async ($, on) => {
+  const w = world(on)
+  let stamp = 1
+  on('fs.stat', () => ({ value: { kind: 'file', size: 1, mtimeMs: stamp, isLink: false } }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'team' } as never)
+  await w.clock.settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  // APP-2 came back on a smaller page: Ada is on it.
+  expect(await ui.find({ type: 'Text', text: /^APP-2$/ })).toBeTruthy()
+
+  // The settings file changes outside the pane: Ada joins Flutter.
+  const path = '/Users/me/.claude/jira-team-dashboard/team.json'
+  const cfg = JSON.parse(w.files[path]!)
+  cfg.members[0].teams = ['iOS', 'Flutter']
+  w.files[path] = JSON.stringify(cfg)
+  stamp = 2
+  await ui.press({ key: 't-Flutter' })
+  expect(await ui.find({ type: 'Button', key: 'devx-ada@example.com' })).toBeTruthy()
+  expect(await ui.find({ type: 'Button', key: 'devx-cy@example.com' })).toBeFalsy()
   await ui.unmount()
 })

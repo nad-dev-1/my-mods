@@ -103,8 +103,16 @@ async function initEnv($: E$): Promise<void> {
   }
 }
 
+/** The settings file's change time when last read: a change made elsewhere is read again. */
+let cfgStamp = -1
+
 async function loadCfg($: E$): Promise<TeamCfg> {
-  if (cfgCache) return cfgCache
+  const stamp = await $.fs
+    .stat(`${dir()}/team.json`)
+    .then(s => s.mtimeMs)
+    .catch(() => 0)
+  if (cfgCache && stamp === cfgStamp) return cfgCache
+  cfgStamp = stamp
   try {
     const raw = JSON.parse(String(await $.fs.read(`${dir()}/team.json`))) as Partial<TeamCfg>
     cfgCache = { ...DEFAULT_CFG, ...raw, leave: raw.leave ?? {}, members: (raw.members ?? []).map(m => ({ ...m, email: m.email.toLowerCase(), teams: m.teams ?? [] })) }
@@ -118,6 +126,10 @@ async function loadCfg($: E$): Promise<TeamCfg> {
 async function saveCfg($: E$, cfg: TeamCfg): Promise<void> {
   cfgCache = cfg
   await $.fs.write(`${dir()}/team.json`, `${JSON.stringify(cfg, null, 2)}\n`)
+  cfgStamp = await $.fs
+    .stat(`${dir()}/team.json`)
+    .then(s => s.mtimeMs)
+    .catch(() => -1)
   await update($, snapVersion, v => v + 1)
 }
 
