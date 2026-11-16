@@ -16,6 +16,7 @@ Claude Code mods: plugins with a hooks module that change what Claude Code does 
 | [`git-review/`](git-review/) | A Git Review button that lists your GitLab merge requests by project and starts a full review of one in a new terminal: conflicts, worktree, pipelines and scans, Sonar, and the project's own code review [User guide](docs/git-review.md) |
 | [`employee-control-panel/`](employee-control-panel/) | A Control Tools button in the status bar that opens a panel to switch the model and effort level for Claude and its subagents, with a live status line [User guide](docs/employee-control-panel.md) |
 | [`jira-session-tracker/`](jira-session-tracker/) | A ◷ Jira button and side pane that follow every Claude Code session on your machine, group unlinked work by folder, and link it to Jira tickets, create tickets, log time and move statuses, writing to Jira only after you confirm a preview. [User guide](docs/jira-session-tracker.md) |
+| [`jira-team-dashboard/`](jira-team-dashboard/) | A ▦ Team button and pane for the team lead: what the team logged and moved in Jira each day, by team, developer, project and story, with gaps, stuck tickets, a Flutter split, trends, exports and a weekly digest; read-only. [User guide](docs/jira-team-dashboard.md) |
 
 ## Guides
 
@@ -33,6 +34,7 @@ A user guide for each mod: what it shows, every button, command and setting, whe
 - [Git Review](docs/git-review.md)
 - [Employee Control Panel](docs/employee-control-panel.md)
 - [Jira Session Tracker](docs/jira-session-tracker.md)
+- [Jira Team Dashboard](docs/jira-team-dashboard.md)
 
 ## Install
 

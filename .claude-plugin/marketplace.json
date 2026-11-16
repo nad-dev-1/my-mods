@@ -66,6 +66,11 @@
       "name": "jira-session-tracker",
       "source": "./jira-session-tracker",
       "description": "A ◷ Jira button and side pane that follow every Claude Code session on your machine, group unlinked work by folder, and link it to Jira tickets, create tickets, log time and move statuses, writing to Jira only after you confirm a preview"
+    },
+    {
+      "name": "jira-team-dashboard",
+      "source": "./jira-team-dashboard",
+      "description": "A ▦ Team button and pane for the team lead: what the team logged and moved in Jira each day, by team, developer, project and story, with gaps, stuck tickets, a Flutter split, trends, exports and a weekly digest; read-only"
     }
   ]
 }
