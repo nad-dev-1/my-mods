@@ -773,11 +773,30 @@ async function drawMain($: E$, el: El, x: DashUi, cfg: TeamCfg, W: number, worki
           {link('pull-missing', 'Pull from Jira', () => $.clock.after(0, () => void pull($, v.missingDays)))}
         </Box>
       )}
-      {[...new Set(v.errors)].slice(0, 3).map((err, i) => (
-        <Text key={`err-${i}`} color={C.red} wrap="truncate-end">
-          ⚠ {err}
-        </Text>
-      ))}
+      {(() => {
+        // Errors are saved with the snapshot: say which pull they came from, and offer to pull again.
+        const withErrors = snaps.filter(s => s.errors.length > 0)
+        if (withErrors.length === 0) return null
+        const lines = withErrors.flatMap(s => s.errors.map(err => `${x.range > 1 ? `${dayLabel(s.day)} · ` : ''}${err}`))
+
+        return (
+          <Box flexDirection="column">
+            <Box flexDirection="row" gap={1} flexWrap="wrap">
+              <Text color={C.red}>
+                ⚠ {lines.length} problem{lines.length === 1 ? '' : 's'} in the pull of {withErrors.length === 1 ? clock(withErrors[0]!.takenAt, off) : `${withErrors.length} days`}; those numbers may be short.
+              </Text>
+              {link('pull-again', 'Pull again', () => $.clock.after(0, () => void pull($, withErrors.map(s => s.day))))}
+            </Box>
+            {lines.slice(0, 3).map((line, i) => (
+              <Text key={`err-${i}`} color={C.red} dimColor wrap="truncate-end">
+                {'  '}
+                {line}
+              </Text>
+            ))}
+            {lines.length > 3 && <Text dimColor>  and {lines.length - 3} more</Text>}
+          </Box>
+        )
+      })()}
       {links([
         ['x-csv', 'Export CSV', () => exportView($, 'csv')],
         ['x-md', 'Export Markdown', () => exportView($, 'md')],

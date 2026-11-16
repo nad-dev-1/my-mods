@@ -201,3 +201,20 @@ test('a Jira call that times out is tried again: the hours are kept and no error
   expect(snap.worklogs.map((x: any) => [x.key, x.seconds])).toEqual([['APP-2', 3 * 3600]])
   expect(w.ops.filter(o => o === 'listJiraIssueWorklogs').length).toBe(2)
 })
+
+test('a problem that outlasts the retries is shown with its pull time, and Pull again clears it', async ($, on) => {
+  // Three timeouts in a row: the first pull gives up on that ticket.
+  const w = world(on, 0, 3)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'team' } as never)
+  await w.clock.advance(10_000)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  expect(await ui.find({ type: 'Text', text: /^⚠ 1 problem in the pull of \d\d:\d\d; those numbers may be short\.$/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /worklogs of APP-2: The operation timed out\./ })).toBeTruthy()
+  await ui.press({ key: 'pull-again' })
+  await w.clock.advance(10_000)
+  expect(await ui.find({ type: 'Button', key: 'pull-again' })).toBeFalsy()
+  expect(await ui.find({ type: 'Text', text: /^3\.0h$/ })).toBeTruthy()
+  await ui.unmount()
+})
