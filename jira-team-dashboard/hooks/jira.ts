@@ -30,6 +30,23 @@ export const ISSUE_FIELDS = [
   'labels',
 ]
 
+/**
+ * Smaller field sets: a user field (assignee, reporter) is most of an issue's
+ * answer, so searches that need no person ask for none and fit more per page.
+ */
+export const FIELDS = {
+  /** What a worklog or a move needs to name its ticket. */
+  plain: ['summary', 'project', 'parent', 'labels', 'issuetype'],
+  /** A story's tasks: status and time only. */
+  progress: ['status', 'parent', 'timetracking', 'timeoriginalestimate', 'timespent'],
+  /** Open work: one person, the status and the time. */
+  open: ['summary', 'status', 'issuetype', 'project', 'parent', 'assignee', 'statuscategorychangedate', 'timetracking', 'timeoriginalestimate', 'timespent', 'labels'],
+  /** Everything, for the few created tickets and for finding members. */
+  all: ISSUE_FIELDS,
+}
+
+export type SearchOptions = { fields?: string[]; page?: number }
+
 function asObj(v: unknown): Json {
   return v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Json) : {}
 }
@@ -125,12 +142,13 @@ function toIssue(node: Json): RawIssue {
  * avatars and all), and an answer too large for a mod arrives cut off and
  * unreadable: so pages start small and halve whenever one comes back cut.
  */
-export async function search($: E$, cloudId: string, jql: string, max = 100): Promise<RawIssue[]> {
+export async function search($: E$, cloudId: string, jql: string, max = 100, opts: SearchOptions = {}): Promise<RawIssue[]> {
   const out: RawIssue[] = []
   let token = ''
-  let size = 20
+  let size = opts.page ?? 20
+  const fields = opts.fields ?? ISSUE_FIELDS
   while (out.length < max) {
-    const args: Json = { cloudId, jql, fields: ISSUE_FIELDS, maxResults: Math.min(size, max - out.length) }
+    const args: Json = { cloudId, jql, fields, maxResults: Math.min(size, max - out.length) }
     if (token) args.nextPageToken = token
     let r: Json
     try {
@@ -200,13 +218,16 @@ export async function worklogs($: E$, cloudId: string, key: string, fromMs: numb
 
 export type RawMove = { accountId: string; at: number; from: string; to: string }
 
-/** Status changes of an issue (the newest 100), oldest first. */
+/** Status changes of an issue (the first 50 and the newest 100), oldest first. One call for most issues. */
 export async function statusMoves($: E$, cloudId: string, key: string): Promise<RawMove[]> {
-  const probe = await read($, cloudId, 'listJiraIssueChangelogs', { issueIdOrKey: key, maxResults: 1 })
-  const total = num(probe.total)
+  const first = await read($, cloudId, 'listJiraIssueChangelogs', { issueIdOrKey: key, startAt: 0, maxResults: 50 })
+  const total = num(first.total)
+  const pages: Json[] = [first]
+  for (let startAt = Math.max(50, total - 100); startAt < total; startAt += 50) {
+    pages.push(await read($, cloudId, 'listJiraIssueChangelogs', { issueIdOrKey: key, startAt, maxResults: 50 }))
+  }
   const out: RawMove[] = []
-  for (let startAt = Math.max(0, total - 100); startAt < total; startAt += 50) {
-    const r = await read($, cloudId, 'listJiraIssueChangelogs', { issueIdOrKey: key, startAt, maxResults: 50 })
+  for (const r of pages) {
     for (const entry of (r.values ?? []) as Json[]) {
       for (const item of (entry.items ?? []) as Json[]) {
         if (str(item.field) !== 'status' && str(item.fieldId) !== 'status') continue

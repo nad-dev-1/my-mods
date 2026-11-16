@@ -41,7 +41,7 @@ const issue = (key: string, extra: Record<string, unknown> = {}) => ({
 
 type World = { files: Record<string, string>; tools: string[]; ops: string[]; clock: ReturnType<typeof mock.clock> }
 
-function world(on: any): World {
+function world(on: any, slowMs = 0): World {
   const w: World = { files: { '/Users/me/.claude/jira-team-dashboard/team.json': JSON.stringify(CFG) }, tools: [], ops: [], clock: mock.clock(on, { now: NOW }) }
   mock.store(on)
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
@@ -54,8 +54,9 @@ function world(on: any): World {
 
     return { value: undefined }
   })
-  on('mcp.call', (_: unknown, e: any) => {
+  on('mcp.call', async (_: unknown, e: any) => {
     w.tools.push(String(e.tool))
+    if (slowMs && e.tool === 'searchJiraIssuesUsingJql') await w.clock.sleep(slowMs)
     const args = e.args ?? {}
     const text = (v: unknown) => ({ value: { content: [{ type: 'text', text: JSON.stringify(v) }], isError: false } })
     if (e.tool === 'searchJiraIssuesUsingJql') {
@@ -158,5 +159,27 @@ test('a cut-off answer is retried in smaller pages; settings changed elsewhere a
   await ui.press({ key: 't-Flutter' })
   expect(await ui.find({ type: 'Button', key: 'devx-ada@example.com' })).toBeTruthy()
   expect(await ui.find({ type: 'Button', key: 'devx-cy@example.com' })).toBeFalsy()
+  await ui.unmount()
+})
+
+test('Pull from Jira pressed while a pull runs is queued, not lost; progress shows', async ($, on) => {
+  // Jira answers slowly: each search takes a second.
+  const w = world(on, 1000)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'team' } as never)
+  await w.clock.settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  // Today's pull is under way and says what it is doing.
+  expect(await ui.find({ type: 'Text', text: /^Pulling Tue Nov 10: / })).toBeTruthy()
+  // On the 7-day view, the missing days can be pulled: pressed now, they wait their turn.
+  await ui.press({ key: 'r-week' })
+  await ui.press({ key: 'pull-missing' })
+  await w.clock.advance(120_000)
+
+  const snaps = Object.keys(w.files).filter(p => p.includes('/snapshots/')).map(p => p.slice(-15, -5)).sort()
+  expect(snaps).toEqual(['2026-11-04', '2026-11-05', '2026-11-06', '2026-11-07', '2026-11-08', '2026-11-09', '2026-11-10'])
+  // Today once, then the six missing days: nothing pulled twice.
+  expect(await ui.find({ type: 'Text', text: /^Pulled 7 days at/ })).toBeTruthy()
   await ui.unmount()
 })

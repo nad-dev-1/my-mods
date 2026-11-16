@@ -27,7 +27,7 @@ import {
   weekOf,
 } from './core'
 import type { View } from './core'
-import { findUser as jiraFindUser, search as jiraSearch, site as jiraSite, statusMoves as jiraStatusMoves, worklogs as jiraWorklogs } from './jira'
+import { FIELDS, findUser as jiraFindUser, search as jiraSearch, site as jiraSite, statusMoves as jiraStatusMoves, worklogs as jiraWorklogs } from './jira'
 import type { RawIssue } from './jira'
 import { statusGrid } from './status-grid'
 
@@ -221,7 +221,8 @@ function toPlain(i: RawIssue, byAccount: Map<string, string>): Issue {
   }
 }
 
-async function collectDay($: E$, day: string): Promise<Snapshot> {
+async function collectDay($: E$, day: string, progress: (text: string) => Promise<void>): Promise<Snapshot> {
+  await progress('finding the team in Jira')
   const cfg = await resolveMembers($, await loadCfg($))
   const cloud = cfg.cloudId
   const errors: string[] = []
@@ -243,57 +244,80 @@ async function collectDay($: E$, day: string): Promise<Snapshot> {
   if (cfg.members.length === 0) throw new Error('No team members yet: add them in ⚙ Setup.')
   const unresolved = cfg.members.filter(m => !m.accountId)
   if (unresolved.length) errors.push(`Not found in Jira yet: ${unresolved.map(m => m.name).join(', ')} (check the email in ⚙ Setup)`)
-
-  // Worklogs of the day.
-  const logged = await step('worklogs', () => jiraSearch($, cloud, `${pc}worklogAuthor in (${who}) AND worklogDate = "${day}"`, 200), [])
-  const worklogs: WL[] = []
-  await inBatches(logged, 6, async issue => {
-    const list = await step(`worklogs of ${issue.key}`, () => jiraWorklogs($, cloud, issue.key, s0, s1), [])
-    for (const w of list) {
-      const email = byAccount.get(w.accountId)
-      if (!email || w.started < s0 || w.started >= s1) continue
-      worklogs.push({
-        id: w.id,
-        key: issue.key,
-        summary: issue.summary,
-        project: issue.project,
-        story: issue.parent,
-        storySummary: issue.parentSummary,
-        email,
-        seconds: w.seconds,
-        started: w.started,
-        comment: w.comment,
-        isFlutter: isFlutterWork(issue, cfg),
-      })
-    }
-  })
-
-  // Status moves of the day, made by a member.
   const scope = cfg.projects.length ? '' : ` AND (assignee in (${who}) OR reporter in (${who}) OR worklogAuthor in (${who}))`
-  const changed = await step('status moves', () => jiraSearch($, cloud, `${pc}status CHANGED DURING ("${day}", "${d2}")${scope}`, 150), [])
-  const moves: Move[] = []
-  await inBatches(changed, 6, async issue => {
-    const list = await step(`history of ${issue.key}`, () => jiraStatusMoves($, cloud, issue.key), [])
-    for (const m of list) {
-      const email = byAccount.get(m.accountId)
-      if (!email || m.at < s0 || m.at >= s1) continue
-      moves.push({ key: issue.key, summary: issue.summary, project: issue.project, email, from: m.from, to: m.to, at: m.at, isBounce: isBounce(m.from, m.to) })
-    }
-  })
+  const none: RawIssue[] = []
 
-  // Tickets created and assigned that day.
-  const createdRaw = await step('created', () => jiraSearch($, cloud, `${pc}created >= "${day}" AND created < "${d2}" AND (reporter in (${who}) OR assignee in (${who}))`, 100), [])
-
-  // Open work as it stands now.
-  const openRaw = await step('open tickets', () => jiraSearch($, cloud, `${pc}assignee in (${who}) AND statusCategory != Done ORDER BY updated DESC`, 300), [])
+  // The four searches of the day, side by side.
+  await progress('searching worklogs, moves, new and open tickets')
+  const [logged, changed, createdRaw, openRaw] = await Promise.all([
+    step('worklogs', () => jiraSearch($, cloud, `${pc}worklogAuthor in (${who}) AND worklogDate = "${day}"`, 200, { fields: FIELDS.plain, page: 50 }), none),
+    step('status moves', () => jiraSearch($, cloud, `${pc}status CHANGED DURING ("${day}", "${d2}")${scope}`, 150, { fields: FIELDS.plain, page: 50 }), none),
+    step('created', () => jiraSearch($, cloud, `${pc}created >= "${day}" AND created < "${d2}" AND (reporter in (${who}) OR assignee in (${who}))`, 100, { fields: FIELDS.all, page: 10 }), none),
+    step('open tickets', () => jiraSearch($, cloud, `${pc}assignee in (${who}) AND statusCategory != Done ORDER BY updated DESC`, 250, { fields: FIELDS.open, page: 25 }), none),
+  ])
   const open = openRaw.map(i => toPlain(i, byAccount))
 
-  // Story progress for every story with work in it.
+  // Each ticket's worklogs and history, a few at a time.
+  let done = 0
+  const total = logged.length + changed.length
+  const tick = async () => {
+    done += 1
+    if (done % 5 === 0 || done === total) await progress(`reading worklogs and history (${done} of ${total} tickets)`)
+  }
+  const worklogs: WL[] = []
+  const moves: Move[] = []
+  await Promise.all([
+    inBatches(logged, 4, async issue => {
+      const list = await step(`worklogs of ${issue.key}`, () => jiraWorklogs($, cloud, issue.key, s0, s1), [])
+      for (const w of list) {
+        const email = byAccount.get(w.accountId)
+        if (!email || w.started < s0 || w.started >= s1) continue
+        worklogs.push({
+          id: w.id,
+          key: issue.key,
+          summary: issue.summary,
+          project: issue.project,
+          story: issue.parent,
+          storySummary: issue.parentSummary,
+          email,
+          seconds: w.seconds,
+          started: w.started,
+          comment: w.comment,
+          isFlutter: isFlutterWork(issue, cfg),
+        })
+      }
+      await tick()
+    }),
+    inBatches(changed, 4, async issue => {
+      const list = await step(`history of ${issue.key}`, () => jiraStatusMoves($, cloud, issue.key), [])
+      for (const m of list) {
+        const email = byAccount.get(m.accountId)
+        if (!email || m.at < s0 || m.at >= s1) continue
+        moves.push({ key: issue.key, summary: issue.summary, project: issue.project, email, from: m.from, to: m.to, at: m.at, isBounce: isBounce(m.from, m.to) })
+      }
+      await tick()
+    }),
+  ])
+
+  // Story progress and sprint hygiene, side by side.
+  await progress('story progress and sprint checks')
   const parents = [...new Set([...logged.map(i => i.parent), ...openRaw.map(i => i.parent)].filter(Boolean))].slice(0, 60)
-  const children = parents.length ? await step('stories', () => jiraSearch($, cloud, `parent in (${parents.join(', ')})`, 400), []) : []
+  const projects = cfg.projects.length ? cfg.projects : [...new Set(openRaw.map(i => i.project))].slice(0, 10)
+  const base = `project in (${projects.join(', ')}) AND sprint in openSprints()`
+  const checks: [string, string][] = projects.length
+    ? [
+        ['no assignee', `${base} AND assignee is EMPTY`],
+        ['no estimate', `${base} AND originalEstimate is EMPTY AND issuetype not in (Epic)`],
+        ['no parent story', `${base} AND parent is EMPTY AND issuetype not in (Epic, Story)`],
+      ]
+    : []
+  const [children, ...checked] = await Promise.all([
+    parents.length ? step('stories', () => jiraSearch($, cloud, `parent in (${parents.join(', ')})`, 400, { fields: FIELDS.progress, page: 100 }), none) : Promise.resolve(none),
+    ...checks.map(([reason, jql]) => step(`sprint check (${reason})`, () => jiraSearch($, cloud, jql, 60, { fields: [...FIELDS.plain, 'assignee'], page: 20 }), none)),
+  ])
   const stories: StoryInfo[] = parents.map(key => {
     const kids = children.filter(c => c.parent === key)
-    const any = [...logged, ...openRaw, ...kids].find(i => i.parent === key)
+    const any = [...logged, ...openRaw].find(i => i.parent === key)
     const byStatus: Record<string, number> = {}
     for (const k of kids) byStatus[k.status] = (byStatus[k.status] ?? 0) + 1
 
@@ -308,27 +332,15 @@ async function collectDay($: E$, day: string): Promise<Snapshot> {
       spentSec: kids.reduce((a, k) => a + k.spentSec, 0),
     }
   })
-
-  // Sprint hygiene in the active sprints of the team's projects.
-  const projects = cfg.projects.length ? cfg.projects : [...new Set(openRaw.map(i => i.project))].slice(0, 10)
   const hygiene = new Map<string, Hygiene>()
-  if (projects.length) {
-    const base = `project in (${projects.join(', ')}) AND sprint in openSprints()`
-    const checks: [string, string][] = [
-      ['no assignee', `${base} AND assignee is EMPTY`],
-      ['no estimate', `${base} AND originalEstimate is EMPTY AND issuetype not in (Epic)`],
-      ['no parent story', `${base} AND parent is EMPTY AND issuetype not in (Epic, Story)`],
-    ]
-    for (const [reason, jql] of checks) {
-      const hits = await step(`sprint check (${reason})`, () => jiraSearch($, cloud, jql, 60), [])
-      for (const h of hits) {
-        const p = toPlain(h, byAccount)
-        const cur = hygiene.get(h.key) ?? { key: h.key, summary: h.summary, project: h.project, assignee: p.assignee, reasons: [] }
-        cur.reasons.push(reason)
-        hygiene.set(h.key, cur)
-      }
+  checks.forEach(([reason], i) => {
+    for (const h of checked[i] ?? []) {
+      const p = toPlain(h, byAccount)
+      const cur = hygiene.get(h.key) ?? { key: h.key, summary: h.summary, project: h.project, assignee: p.assignee, reasons: [] }
+      cur.reasons.push(reason)
+      hygiene.set(h.key, cur)
     }
-  }
+  })
 
   return {
     day,
@@ -344,25 +356,41 @@ async function collectDay($: E$, day: string): Promise<Snapshot> {
   }
 }
 
+/** Days waiting to be pulled; a press while a pull runs adds to it. */
+const queue: string[] = []
+/** The day being pulled right now, so a press for it is not queued twice. */
+let pullingDay = ''
+
 /** Pulls days from Jira and snapshots each; the pane keeps the last snapshot if Jira is down. */
 async function pull($: E$, days: string[]): Promise<void> {
-  if (pulling) return pulling
+  const fresh = days.filter(d => !queue.includes(d) && d !== pullingDay)
+  queue.push(...fresh)
+  if (pulling) {
+    if (fresh.length) await say($, `${fresh.map(dayLabel).join(', ')} will be pulled next.`)
+
+    return pulling
+  }
   pulling = (async () => {
     nowMs = await $.clock.now().catch(() => Date.now())
     let done = 0
-    for (const day of days) {
-      await update($, busy, () => `Pulling ${dayLabel(day)} from Jira (${done + 1} of ${days.length})…`)
+    let failed = false
+    while (queue.length > 0) {
+      const day = queue.shift()!
+      pullingDay = day
+      const progress = (text: string) => update($, busy, () => `Pulling ${dayLabel(day)}${queue.length ? ` (${queue.length} more after)` : ''}: ${text}…`).then(() => undefined)
       try {
-        await saveSnap($, await collectDay($, day))
+        await saveSnap($, await collectDay($, day, progress))
         done += 1
       } catch (err) {
+        failed = true
+        queue.length = 0
         await say($, `Jira did not answer for ${dayLabel(day)}: ${err instanceof Error ? err.message : String(err)}. Showing the last snapshot.`)
-        break
       }
     }
-    if (done === days.length) await say($, `Pulled ${done} day${done === 1 ? '' : 's'} at ${clock(now(), off)}.`)
+    if (!failed) await say($, `Pulled ${done} day${done === 1 ? '' : 's'} at ${clock(now(), off)}.`)
   })().finally(async () => {
     pulling = null
+    pullingDay = ''
     await update($, busy, () => '')
   })
 
@@ -485,6 +513,8 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const r = await next(e)
     await initEnv($)
+    // A pull a reload cut short leaves its message behind: clear it.
+    await update($, busy, () => '')
     const cmds: [string, string, string?][] = [
       ['team', 'Open the Jira team dashboard'],
       ['team-refresh', 'Pull today from Jira and snapshot it'],
