@@ -5,7 +5,7 @@ const URL = 'https://claude.ai/artifact/AbcDEF123'
 const CACHE = '/Users/me/.team-board/cache'
 const PLAN = 'mcp__team-board__board_plan'
 
-type World = { files: Record<string, string>; prompts: string[]; status: (string | undefined)[]; toasts: string[]; clock: ReturnType<typeof mock.clock> }
+type World = { opened: string[]; files: Record<string, string>; prompts: string[]; status: (string | undefined)[]; toasts: string[]; clock: ReturnType<typeof mock.clock> }
 
 const members = [
   { id: 'ada', name: 'Ada Lane', teams: ['iOS'], isSenior: false, active: true },
@@ -14,7 +14,7 @@ const members = [
 const item = (id: string, f: any) => ({ id, type: 'task', title: id, description: '', projectId: 'atlas', priority: 'medium', rank: 'i', status: 'backlog', archived: false, createdAt: '2026-11-10T08:00:00Z', updatedAt: '2026-11-18T08:00:00Z', lastActivityAt: '2026-11-18T08:00:00Z', assigneeId: null, collaboratorIds: [], assignmentHistory: [], queueRank: '', jiraKeys: [], etaOriginal: null, etaCurrent: null, etaHistory: [], startDate: null, reviewRequestedAt: null, reviewedBy: null, reviewedOn: null, reviewNote: '', endDate: null, manualDateFlags: [], ...f })
 
 function world(on: any, opts: { connected?: boolean; board?: boolean } = {}): World {
-  const w: World = { files: {}, prompts: [], status: [], toasts: [], clock: mock.clock(on, { now: NOW }) }
+  const w: World = { opened: [], files: {}, prompts: [], status: [], toasts: [], clock: mock.clock(on, { now: NOW }) }
   mock.store(on)
   const put = (coll: string, doc: any) => (w.files[`${CACHE}/${coll}/${doc.id}.json`] = JSON.stringify(doc))
   if (opts.connected !== false) w.files['/Users/me/.team-board/config.json'] = JSON.stringify({ adapter: 'artifact-db', artifactUrl: URL, artifactSlug: 'AbcDEF123', lastToastDate: null, lastFlagged: [] })
@@ -22,6 +22,7 @@ function world(on: any, opts: { connected?: boolean; board?: boolean } = {}): Wo
     put('config', { id: 'settings', timezone: 'Asia/Beirut', staleDays: 5, wipLimit: 3, recentlyDoneDays: 14, jira: {}, reports: {} })
     put('config', { id: 'counters', idea: 0, task: 2 })
     members.forEach(m => put('members', m))
+    put('members', { id: 'lead', name: 'Lee Lead', teams: ['Lead'], isSenior: true, active: true, isOwner: true })
     put('projects', { id: 'atlas', name: 'Atlas', jiraProjectKeys: ['APP'] })
     put('items', item('T-0001', { title: 'Fix APN retry crash', assigneeId: 'ada', status: 'in_progress', startDate: '2026-11-12', etaOriginal: '2026-11-17', etaCurrent: '2026-11-17', queueRank: 'i' }))
     put('items', item('T-0002', { title: 'Offline plan cache', assigneeId: 'ada', status: 'assigned', queueRank: 'r', priority: 'high' }))
@@ -51,6 +52,15 @@ function world(on: any, opts: { connected?: boolean; board?: boolean } = {}): Wo
     return { text: e.text }
   })
   on('turn.complete', () => ({ text: '' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.close', () => ({ value: undefined }))
+  on('ui.scroll', () => ({ value: { offset: 0 } }))
+  on('ui.render', ($: any, e: any, next: any) => next(e))
+  on('process.run', (_: unknown, e: any) => {
+    w.opened.push(e.argv.join(' '))
+
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
   on('ui.status', (_: unknown, e: any) => {
     w.status.push(e.text)
 
@@ -154,4 +164,27 @@ test('board_summary and board_report read the cache; the report saves Markdown a
   const writes = JSON.parse(second.split('\n').find(l => l.startsWith('['))!)
   expect(writes[0].collection).toBe('reports')
   expect(writes[0].data.markdown).toContain('## Executive summary\n\nTwo tasks open; one is late.')
+})
+
+test('the ▤ Board button opens a pane: you first, who is on what, attention, and its buttons work', async ($, on) => {
+  const w = world(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const bar = await $.ui.mount({ plugin: 'team-board', component: 'SessionMode', props: { modes: [] }, surface: 'terminal' } as never)
+  expect(await bar.find({ type: 'Text', text: /▤ Board/ })).toBeTruthy()
+  await bar.press({ key: 'open-board' })
+  const ui = await $.ui.mount({ plugin: 'team-board', component: 'Pane', requestId: 'team-board', props: { title: 'Team Board', isFocused: true, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} }, surface: 'terminal' } as never)
+  const texts = (await ui.findAll({ type: 'Text' })).map((t: any) => t.text)
+  expect(texts.indexOf('Lee Lead (you)')).toBeLessThan(texts.indexOf('Ada Lane'))
+  expect(await ui.find({ type: 'Text', text: 'Attention: 1 overdue · 1 blocked' })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: 'T-0001' })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /next: T-0002 Offline plan cache/ })).toBeTruthy()
+  await ui.press({ key: 'open-dashboard' })
+  await w.clock.advance(10)
+  expect(w.opened).toEqual([`open ${URL}`])
+  await ui.press({ key: 'refresh' })
+  await w.clock.advance(10)
+  expect(w.prompts.at(-1)).toContain('board_summary')
+  expect(await ui.find({ type: 'Text', text: 'Asked Claude to read the board again…' })).toBeTruthy()
+  await ui.unmount()
+  await bar.unmount()
 })

@@ -111,6 +111,8 @@ Every command takes plain language. Claude reads it, shows a **preview**, and wr
 
 `/board-status` and `/board-review` carry the `board-` prefix because Claude Code already has `/status` and `/review`.
 
+**In the status bar:** the **▤ Board** button opens a Team Board pane beside the chat: you first, then each person's ongoing work and queue with flags, unassigned tasks, open ideas and an attention line. Its buttons: **⟳ Refresh** (Claude reads the board again), **↗ Open dashboard**, **⧉ Copy link** and **Report: this week**. `/board` opens it too.
+
 **In the background:**
 - **Status line:** e.g. `📋 2 overdue · 1 blocked`, hidden when there's nothing to show.
 - **Daily toast:** once a day at session start, when items have newly become overdue or stale since the last one.
@@ -180,7 +182,7 @@ Each change is also logged in the item's activity feed.
 
 | Setting | Default |
 | --- | --- |
-| Team: name, email, Jira account id, teams, senior, active | — (inactive people leave the pickers but keep their history; someone with no history can be deleted) |
+| Team: name, email, Jira account id, teams, senior, active (the board owner is marked as owner, so "me" in commands means them) | — (inactive people leave the pickers but keep their history; someone with no history can be deleted) |
 | Projects: name, Jira project keys, default team | — (a project no item uses can be deleted) |
 | Stale after | 5 days |
 | WIP warning above | 3 ongoing items |

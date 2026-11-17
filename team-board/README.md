@@ -5,6 +5,7 @@ Capture ideas and tasks, assign them to your team, see who is working on what, p
 - **The dashboard** has Team, Kanban, List and Ideas views, a detail drawer, filters, drag-to-reorder, reports (exported as PDF, Markdown or CSV) and Settings.
 - **The commands** are `/idea`, `/task`, `/task from-session`, `/assign`, `/board-status`, `/eta`, `/note`, `/link`, `/board-review`, `/board`, `/board refresh`, `/board-report` and `/board-setup`. Each one shows a preview, and nothing is written until you confirm.
 - **Read-only toward Jira.** The board links tickets and shows their live status, but never creates, moves or comments on anything in Jira.
+- **A ▤ Board button** in the status bar opens a pane with who is on what and what needs attention.
 - **Stays out of your way:** a status line such as `📋 2 overdue · 1 blocked`, plus a once-a-day toast when items newly become overdue or stale.
 
 Setup: install the mod, then run `/board-setup` (it can publish the dashboard for you). The full guide is in [`docs/team-board.md`](../docs/team-board.md).

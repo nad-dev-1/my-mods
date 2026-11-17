@@ -4,6 +4,7 @@
 // dashboard runs) and answer the exact writes, and Claude sends them only
 // after the person confirms the preview. Nothing here writes to Jira.
 
+import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import {
@@ -34,12 +35,19 @@ import {
   todayIn,
   wipOver,
 } from './core.js'
+import { statusGrid } from './status-grid'
 
 type E$ = EngineInterface
 type Json = Record<string, any>
 type Doc = Json & { id: string }
 
 export const SERVER = 'claude_ai_Atlassian_MCP'
+const PANE = 'team-board'
+const version = atom({ plugin: 'team-board', key: 'version' } as const, 0)
+const note = atom({ plugin: 'team-board', key: 'note' } as const, '')
+const C = { teal: '#4FD1C5', accent: '#4C9AFF', red: '#FF5630', amber: '#FFAB00', green: '#57D9A3', muted: '#8993A4' }
+let paneOpen = false
+
 const COLLS = ['config', 'members', 'projects', 'items', 'events', 'jira', 'reports'] as const
 const TOOL = (name: string) => `mcp__team-board__${name}`
 const PLAN_TOOL = 'mcp__team-board__board_plan'
@@ -476,6 +484,7 @@ export async function refreshStatus($: E$, board?: Board): Promise<string> {
   const today = await todayOf($, b)
   const line = statusLine(b.items, b.events, { today, settings: b.settings, jira: b.jira, members: b.members })
   await $.ui.status(line ? `📋 ${line}` : undefined)
+  await update($, version, v => v + 1)
 
   return line
 }
@@ -605,6 +614,156 @@ function passThrough($: E$, e: any, next: any) {
   return next(e)
 }
 
+// ── the pane and its status-bar button ─────────────────────────────────
+
+async function openPane($: E$): Promise<void> {
+  const opened = await $.ui.open({ id: PANE, title: 'Team Board', focus: true, closeOnEscape: true })
+  if (!opened.isPlaced) {
+    await $.ui.toast(`The Team Board pane could not open: ${opened.reason}`)
+
+    return
+  }
+  paneOpen = true
+  await update($, version, v => v + 1)
+}
+
+/** Hands Claude a procedure from a button (after the press returns). */
+async function askClaude($: E$, cmd: string, args: string, said: string): Promise<void> {
+  const cfg = await loadConfig($)
+  if (!cfg) return
+  const b = await loadBoard($)
+  const text = procedure(cmd, args, cfg, await cacheDir($), await todayOf($, b))
+  await update($, note, () => said)
+  if (text) await $.prompt.submit({ text })
+}
+
+function fit(s: string, n: number): string {
+  const t = String(s || '')
+
+  return t.length > n ? `${t.slice(0, Math.max(1, n - 1))}…` : t
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function drawPane($: E$, el: any, W: number): Promise<unknown> {
+  const { Box, Text, Button } = el
+  await read($, version)
+  const said = await read($, note)
+  const cfg = await loadConfig($)
+  const link = (key: string, label: string, onPress: (press: { surface: string }) => unknown, color = C.accent) => (
+    <Button key={key} plain onPress={onPress}>
+      <Text color={color}>{label}</Text>
+    </Button>
+  )
+  if (!cfg) {
+    return (
+      <Box flexDirection="column">
+        <Text bold>Team Board is not connected.</Text>
+        <Text dimColor>Run /board-setup: it connects your board, or publishes a new one.</Text>
+      </Box>
+    )
+  }
+  const b = await loadBoard($)
+  const today = await todayOf($, b)
+  const fctx = { today, settings: b.settings, blockers: openBlockers(b.events), jira: b.jira, members: b.members }
+  const live = b.items.filter(i => !i.archived)
+  const wip = wipOver(live, b.settings.wipLimit)
+  const line = statusLine(b.items, b.events, { today, settings: b.settings, jira: b.jira, members: b.members })
+  const age = Math.max(...Object.values(b.fetchedAt))
+  const asOf = age ? new Date(age).toISOString().slice(11, 16) + ' UTC' : 'never'
+  const flagText = (it: Json) => {
+    const f = flagsFor(it, fctx)
+
+    return [f.overdue && 'overdue', f.slipped && `+${f.slipDays}d`, f.blocked && 'blocked', f.stale && 'stale', f.needsClosing && 'needs closing'].filter(Boolean).join(', ')
+  }
+  const people = b.members.filter(m => m.active !== false).sort((x, y) => Number(!!y.isOwner) - Number(!!x.isOwner) || String(x.name).localeCompare(String(y.name)))
+  const unassigned = live.filter(i => i.type === 'task' && !i.assigneeId && isOpenTask(i)).sort(byPriority)
+  const ideas = live.filter(i => i.type === 'idea' && ['new', 'discussing', 'approved'].includes(i.status))
+  const T = Math.max(20, Math.min(W, 120) - 34)
+
+  return (
+    <Box flexDirection="column">
+      <Box flexDirection="row" gap={2} flexWrap="wrap">
+        <Text bold color={C.teal}>
+          Team Board
+        </Text>
+        <Text dimColor>
+          {today} · data as of {asOf}
+        </Text>
+      </Box>
+      <Box flexDirection="row" gap={2} flexWrap="wrap">
+        {link('refresh', '⟳ Refresh', () => {
+          $.clock.after(0, () => void askClaude($, 'board', '', 'Asked Claude to read the board again…'))
+        })}
+        {link('open-dashboard', '↗ Open dashboard', () => {
+          $.clock.after(0, () => void $.process.run(['open', cfg.artifactUrl], { timeoutMs: 5_000 }).catch(() => undefined))
+        })}
+        {link('copy-link', '⧉ Copy link', press => $.ui.copy({ text: cfg.artifactUrl, surface: press.surface } as never))}
+        {link('report-week', 'Report: this week', () => {
+          $.clock.after(0, () => void askClaude($, 'board-report', 'team this_week', 'Asked Claude for this week’s report…'))
+        })}
+      </Box>
+      {said ? <Text dimColor>{said}</Text> : null}
+      <Text color={line ? C.red : C.green}>{line ? `Attention: ${line}` : 'Nothing overdue or blocked.'}</Text>
+      <Text dimColor>{'─'.repeat(Math.max(10, Math.min(W, 100) - 2))}</Text>
+      {live.length === 0 ? <Text dimColor>No ideas or tasks yet. Capture one with /task or /idea, or in the dashboard.</Text> : null}
+      {people.map(m => {
+        const mine = live.filter(i => i.type === 'task' && i.assigneeId === m.id)
+        const ongoing = mine.filter(isOngoing).sort(byQueue)
+        const next = mine.filter(i => ['assigned', 'backlog'].includes(i.status)).sort(byQueue)
+
+        return (
+          <Box key={`m-${m.id}`} flexDirection="column" marginTop={1}>
+            <Box flexDirection="row" gap={1}>
+              <Text bold>{m.name}{m.isOwner ? ' (you)' : ''}</Text>
+              <Text dimColor>{(m.teams || []).join(' · ')}</Text>
+              {wip[m.id] ? <Text color={C.amber}>over WIP limit</Text> : null}
+              <Text dimColor>
+                {ongoing.length} ongoing · {next.length} next
+              </Text>
+            </Box>
+            {ongoing.map(i => {
+              const f = flagText(i)
+
+              return (
+                <Text key={`o-${i.id}`} wrap="truncate-end">
+                  {'  ▸ '}
+                  <Text color={C.accent}>{i.id}</Text> {fit(i.title, T)}
+                  <Text dimColor>
+                    {' '}
+                    · {STAGE_LABEL[i.status as keyof typeof STAGE_LABEL]}
+                    {i.etaCurrent ? ` · ETA ${i.etaCurrent}` : ''}
+                  </Text>
+                  {f ? <Text color={C.red}> {f}</Text> : null}
+                </Text>
+              )
+            })}
+            {next.length ? <Text dimColor wrap="truncate-end">{`  next: ${next.slice(0, 4).map(i => `${i.id} ${fit(i.title, 24)}`).join(' · ')}${next.length > 4 ? ` +${next.length - 4}` : ''}`}</Text> : null}
+          </Box>
+        )
+      })}
+      {unassigned.length ? (
+        <Box marginTop={1}>
+          <Text wrap="truncate-end">
+            <Text bold>Unassigned </Text>
+            <Text dimColor>{unassigned.slice(0, 6).map(i => `${i.id} ${fit(i.title, 24)}`).join(' · ')}</Text>
+          </Text>
+        </Box>
+      ) : null}
+      {ideas.length ? (
+        <Text>
+          <Text bold>Ideas </Text>
+          <Text dimColor>
+            {ideas.length} open, {ideas.filter(i => i.status === 'approved').length} approved and ready to convert
+          </Text>
+        </Text>
+      ) : null}
+      <Box marginTop={1}>
+        <Text dimColor>Capture with /task or /idea · update with /assign /board-status /eta /note /link · Esc closes</Text>
+      </Box>
+    </Box>
+  )
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const r = await next(e)
@@ -655,6 +814,54 @@ export const register: Register = on => {
     }
 
     return done
+  }).catch(passThrough)
+
+  // The status-bar button: opens or closes the Team Board pane.
+  on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+    const { Box, Button, Text } = $.ui.resolve(e)
+    const below = await next(e)
+    const fill = paneOpen ? '#B2F5EA' : C.teal
+
+    return statusGrid(
+      { Box, Text },
+      below,
+      e.props.modes,
+      <Button
+        key="open-board"
+        plain
+        onPress={async () => {
+          if (paneOpen) await $.ui.close({ id: PANE })
+          else await openPane($)
+        }}
+      >
+        <Text color={fill}>▐</Text>
+        <Text backgroundColor={fill} color="#091E42" bold>
+          ▤ Board
+        </Text>
+        <Text color={fill}>▌</Text>
+      </Button>,
+    ) as never
+  })
+
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const el = $.ui.resolve(e)
+
+    return (await drawPane($, el, Math.max(50, e.props.bodyColumns ?? 100))) as never
+  })
+
+  on('ui.close', { id: PANE }, async ($, e, next) => {
+    paneOpen = false
+    await update($, note, () => '')
+
+    return next(e)
+  })
+
+  // /board also opens the pane beside the answer.
+  on('command.run', { command: 'board' }, async ($, e, next) => {
+    const r = await next(e)
+    if (!paneOpen && !/^refresh\b/i.test(e.args.trim())) await openPane($).catch(() => undefined)
+
+    return r
   }).catch(passThrough)
 
   // The cache changed (Claude listed or wrote the board): redraw the status line.

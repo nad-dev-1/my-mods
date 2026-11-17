@@ -2081,7 +2081,7 @@ document.addEventListener('submit', async e => {
       if (!id) return
       if (!form.dataset.member && S.members.some(m => m.id === id)) { toast('Someone with that name is already on the roster.', 'warn'); return }
       const doc = { id, name: d.name.trim(), email: (d.email || '').trim(), jiraAccountId: (d.jiraAccountId || '').trim(), teams: String(d.teams || '').split(',').map(s => s.trim().replace(/\s+team$/i, '')).filter(Boolean), isSenior: !!d.isSenior, active: !!d.active }
-      await put(`members/${id}`, doc)
+      await put(`members/${id}`, { ...(member(id) || {}), ...doc })
       toast(form.dataset.member ? 'Saved.' : `${doc.name} added.`)
       if (!form.dataset.member) setTimeout(openSettings, 300)
       return
