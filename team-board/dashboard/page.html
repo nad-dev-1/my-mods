@@ -1,0 +1,1211 @@
+<title>Team Board</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" defer></script>
+<style>
+/* Layout: a sticky command bar and filter row over one working surface (team columns, stage columns, a table or the idea backlog); a drawer slides in from the right for one item. */
+:root {
+  --bg: #f3f4f7; --surface: #ffffff; --surface-2: #eceff4; --ink: #18202c; --muted: #5a6475; --line: #d7dce4;
+  --accent: #2e56c9; --accent-soft: #e3e9fb; --accent-ink: #ffffff;
+  --crit: #b8302a; --high: #b8640f; --med: #4e6a99; --low: #7c8596;
+  --ok: #1d7448; --warn: #9b6a10; --bad: #b8302a; --ok-soft: #e1f2e8; --warn-soft: #f8edd5; --bad-soft: #f9e2e0;
+  --shadow: 0 1px 2px rgba(20, 28, 44, .08), 0 4px 14px rgba(20, 28, 44, .06);
+  --font: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f131a; --surface: #161b24; --surface-2: #1d2430; --ink: #e5e9f0; --muted: #98a2b3; --line: #2a3242;
+  --accent: #86a3ff; --accent-soft: #232f4f; --accent-ink: #0f131a;
+  --crit: #ff7a70; --high: #f0a650; --med: #8fa8d6; --low: #8a93a4;
+  --ok: #57c690; --warn: #e3b456; --bad: #ff7a70; --ok-soft: #173326; --warn-soft: #362a12; --bad-soft: #3a1c1a;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 4px 14px rgba(0,0,0,.3); color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0f131a; --surface: #161b24; --surface-2: #1d2430; --ink: #e5e9f0; --muted: #98a2b3; --line: #2a3242;
+  --accent: #86a3ff; --accent-soft: #232f4f; --accent-ink: #0f131a;
+  --crit: #ff7a70; --high: #f0a650; --med: #8fa8d6; --low: #8a93a4;
+  --ok: #57c690; --warn: #e3b456; --bad: #ff7a70; --ok-soft: #173326; --warn-soft: #362a12; --bad-soft: #3a1c1a;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 4px 14px rgba(0,0,0,.3); color-scheme: dark }
+* { box-sizing: border-box }
+body { background: var(--bg); color: var(--ink); font: 14px/1.45 var(--font); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--surface) }
+button, input, select, textarea { font: inherit; color: inherit }
+button { cursor: pointer }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }
+.mono { font-family: var(--mono); font-size: 12.5px; font-variant-numeric: tabular-nums }
+.muted { color: var(--muted) }
+.wrap { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)) }
+
+header.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: var(--surface); border-bottom: 1px solid var(--line) }
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding-block: 10px }
+.brand { font-weight: 600; font-size: 17px; letter-spacing: -.01em; margin-right: auto; display: flex; align-items: baseline; gap: 10px }
+.brand small { font-weight: 400; color: var(--muted); font-size: 12.5px }
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 6px 11px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap }
+.btn:hover { border-color: var(--muted) }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 500 }
+.btn.ghost { border-color: transparent; background: transparent }
+.btn.small { padding: 3px 8px; font-size: 12.5px }
+.btn.danger { color: var(--bad) }
+.btn:disabled { opacity: .5; cursor: not-allowed }
+.btn .sub { font-size: 11.5px; color: var(--muted); font-weight: 400 }
+.btn.primary .sub { color: inherit; opacity: .8 }
+
+.filters { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; padding-block: 8px; border-top: 1px solid var(--line) }
+.filters select, .filters input[type=search] { border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 4px 6px; font-size: 13px; max-width: 160px }
+.filters input[type=search] { min-width: 0; width: 180px }
+.chk { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; color: var(--muted); padding: 2px 6px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); cursor: pointer; user-select: none }
+.chk input { margin: 0 }
+.chk.on { color: var(--ink); border-color: var(--accent); background: var(--accent-soft) }
+.tabs { display: flex; gap: 2px; padding-block: 0; overflow-x: auto }
+.tab { border: 0; background: none; padding: 9px 12px 8px; border-bottom: 2px solid transparent; color: var(--muted); font-weight: 500 }
+.tab.on { color: var(--ink); border-bottom-color: var(--accent) }
+.tab .n { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-left: 4px }
+
+main { padding-block: 14px 60px }
+.banner { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center }
+.banner.warn { background: var(--warn-soft); border-color: transparent }
+.banner.bad { background: var(--bad-soft); border-color: transparent }
+
+/* team columns */
+.board { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 8px; align-items: flex-start }
+.col { flex: 0 0 280px; max-width: 86vw; background: var(--surface-2); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 10px; min-width: 0 }
+.col-head { display: flex; align-items: center; gap: 8px }
+.col-head .name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.col-head .teams { font-size: 11.5px; color: var(--muted) }
+.col-head .count { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--muted) }
+.sec { display: flex; flex-direction: column; gap: 6px; min-height: 26px; border-radius: 8px; padding: 2px }
+.sec-label { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); display: flex; gap: 6px; align-items: center }
+.sec-label .wip { color: var(--bad); text-transform: none; letter-spacing: 0; font-weight: 500 }
+.drop-on { outline: 2px dashed var(--accent); outline-offset: -2px; background: var(--accent-soft) }
+.empty { font-size: 12.5px; color: var(--muted); padding: 4px 2px }
+
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 5px; cursor: pointer; border-left: 3px solid var(--low); min-width: 0 }
+.card:hover { border-color: var(--muted) }
+.card.p-critical { border-left-color: var(--crit) } .card.p-high { border-left-color: var(--high) } .card.p-medium { border-left-color: var(--med) }
+.card.dragging { opacity: .45 }
+.card-top { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); min-width: 0 }
+.card-top .proj { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0 }
+.card-title { font-weight: 500; overflow-wrap: anywhere }
+.card-meta { display: flex; flex-wrap: wrap; gap: 4px; align-items: center }
+.pill { font-size: 11px; padding: 1px 6px; border-radius: 999px; font-weight: 500; border: 1px solid currentColor; white-space: nowrap }
+.pill.critical { color: var(--crit) } .pill.high { color: var(--high) } .pill.medium { color: var(--med) } .pill.low { color: var(--low) }
+.badge { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--surface-2); color: var(--muted); white-space: nowrap; font-weight: 500 }
+.badge.bad { background: var(--bad-soft); color: var(--bad) } .badge.warn { background: var(--warn-soft); color: var(--warn) } .badge.ok { background: var(--ok-soft); color: var(--ok) } .badge.info { background: var(--accent-soft); color: var(--accent) }
+.eta { font-family: var(--mono); font-size: 11.5px; color: var(--muted) }
+.eta.late { color: var(--bad); font-weight: 500 }
+.avs { display: inline-flex }
+.av { width: 20px; height: 20px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 9.5px; font-weight: 600; color: #fff; border: 2px solid var(--surface); margin-left: -5px }
+.av:first-child { margin-left: 0 }
+.jchip { font-family: var(--mono); font-size: 11px; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap }
+.jchip.done { border-color: var(--ok); color: var(--ok) } .jchip.indeterminate { border-color: var(--accent); color: var(--accent) } .jchip.err { border-color: var(--bad); color: var(--bad) }
+
+/* kanban */
+.kanban .col { flex-basis: 250px }
+
+/* list */
+.tablewrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px }
+table.list { border-collapse: collapse; width: 100%; min-width: 900px }
+table.list th, table.list td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top }
+table.list th { font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); font-weight: 500; white-space: nowrap; position: sticky; top: 0; background: var(--surface) }
+table.list th button { border: 0; background: none; padding: 0; text-transform: inherit; letter-spacing: inherit; color: inherit; font-weight: inherit }
+table.list tr.row:hover td { background: var(--surface-2) }
+table.list tr.row { cursor: pointer }
+table.list td.title { font-weight: 500; min-width: 220px }
+.bulk { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 10px; background: var(--accent-soft); border-radius: 8px; margin-bottom: 8px }
+.bulk select { border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; background: var(--surface) }
+
+/* ideas */
+.band { margin-bottom: 18px }
+.band h3 { font-size: 13px; margin: 0 0 6px; display: flex; gap: 8px; align-items: center }
+.idea { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-bottom: 6px }
+.idea .t { font-weight: 500; cursor: pointer; overflow-wrap: anywhere }
+.idea .ctl { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end }
+.idea select { border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; background: var(--surface); font-size: 12.5px }
+@media (max-width: 640px) { .idea { grid-template-columns: minmax(0, 1fr) } .idea .ctl { justify-content: flex-start } }
+
+/* drawer */
+.drawer { position: fixed; z-index: 40; top: 0; right: 0; bottom: 0; width: min(560px, 100%); background: var(--surface); border-left: 1px solid var(--line); box-shadow: var(--shadow); display: flex; flex-direction: column; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); padding-right: env(safe-area-inset-right, 0px) }
+.drawer[hidden] { display: none }
+.dr-head { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line) }
+.dr-body { overflow-y: auto; padding: 14px 16px 30px; display: flex; flex-direction: column; gap: 16px }
+.dr-title { width: 100%; font-size: 17px; font-weight: 600; border: 1px solid transparent; border-radius: 6px; padding: 4px 6px; background: transparent }
+.dr-title:hover, .dr-title:focus { border-color: var(--line) }
+.fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px }
+@media (max-width: 480px) { .fields { grid-template-columns: minmax(0, 1fr) } }
+.f { display: flex; flex-direction: column; gap: 3px; min-width: 0 }
+.f > span { font-size: 11.5px; color: var(--muted); display: flex; gap: 6px; align-items: center }
+.f select, .f input, .f textarea, .inp { border: 1px solid var(--line); border-radius: 6px; padding: 5px 7px; background: var(--surface); width: 100%; min-width: 0 }
+textarea { resize: vertical; min-height: 64px }
+.edited { font-size: 10.5px; color: var(--warn) }
+.block h4 { margin: 0 0 6px; font-size: 12px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); font-weight: 500; display: flex; align-items: center; gap: 8px }
+.hist { margin: 0; padding: 0; list-style: none; font-size: 12.5px; display: flex; flex-direction: column; gap: 3px }
+.collab { display: flex; flex-wrap: wrap; gap: 4px }
+.jrow { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px 10px; align-items: start; padding: 6px 0; border-bottom: 1px solid var(--line) }
+.jrow .s { font-size: 12.5px; overflow-wrap: anywhere }
+.jrow a { color: var(--accent); text-decoration: none }
+.feed { display: flex; flex-direction: column; gap: 8px }
+.ev { font-size: 13px; border-left: 2px solid var(--line); padding: 2px 0 2px 10px }
+.ev.note { border-left-color: var(--accent) }
+.ev.note.blocker { border-left-color: var(--bad) } .ev.note.decision { border-left-color: var(--ok) }
+.ev .meta { font-size: 11.5px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px; align-items: center }
+.ev .body { white-space: pre-wrap; overflow-wrap: anywhere }
+.ev.system { color: var(--muted); font-size: 12.5px }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden }
+.seg button { border: 0; background: var(--surface); padding: 2px 8px; font-size: 12px }
+.seg button.on { background: var(--accent-soft); color: var(--accent) }
+.row-actions { display: flex; flex-wrap: wrap; gap: 8px }
+
+/* modal */
+.scrim { position: fixed; inset: 0; z-index: 50; background: rgba(10, 14, 22, .45); display: grid; place-items: start center; overflow-y: auto; padding: max(24px, env(safe-area-inset-top, 0px)) max(12px, env(safe-area-inset-right, 0px)) 24px max(12px, env(safe-area-inset-left, 0px)) }
+.scrim[hidden] { display: none }
+.modal { background: var(--surface); border-radius: 12px; box-shadow: var(--shadow); width: min(560px, 100%); padding: 18px; display: flex; flex-direction: column; gap: 14px; min-width: 0 }
+.modal.wide { width: min(1040px, 100%) }
+.modal h2 { margin: 0; font-size: 17px }
+.modal .actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px }
+@media (max-width: 560px) { .grid2 { grid-template-columns: minmax(0, 1fr) } }
+.settings-sec { border-top: 1px solid var(--line); padding-top: 12px; display: flex; flex-direction: column; gap: 8px }
+.settings-sec h3 { margin: 0; font-size: 14px }
+.mrow { display: grid; grid-template-columns: 1.2fr 1.4fr 1fr 1fr auto auto auto; gap: 6px; align-items: center }
+.prow { display: grid; grid-template-columns: 1.4fr 1fr 1fr auto auto; gap: 6px; align-items: center }
+@media (max-width: 760px) { .mrow, .prow { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) } }
+.mrow input, .prow input, .prow select { border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; background: var(--surface); min-width: 0; width: 100% }
+.mrow label, .prow label { font-size: 12.5px; display: inline-flex; gap: 4px; align-items: center; white-space: nowrap }
+
+/* reports */
+.rep { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 18px }
+@media (max-width: 800px) { .rep { grid-template-columns: minmax(0, 1fr) } }
+.rep aside { display: flex; flex-direction: column; gap: 10px }
+.rep .history { border-top: 1px solid var(--line); padding-top: 10px; display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow-y: auto }
+.rep .history button { text-align: left; border: 1px solid transparent; background: none; border-radius: 6px; padding: 5px 6px; font-size: 12.5px }
+.rep .history button:hover, .rep .history button.on { border-color: var(--line); background: var(--surface-2) }
+.nums { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px }
+.num { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px }
+.num b { display: block; font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums }
+.num span { font-size: 11.5px; color: var(--muted) }
+.doc { display: flex; flex-direction: column; gap: 10px; min-width: 0 }
+.doc h3 { margin: 6px 0 0; font-size: 14px }
+.doc ul { margin: 0; padding-left: 18px }
+.doc table { border-collapse: collapse; font-size: 12.5px }
+.doc td, .doc th { border-bottom: 1px solid var(--line); padding: 4px 10px 4px 0; text-align: left }
+.md h1 { font-size: 18px; margin: 0 } .md h2 { font-size: 14.5px; margin: 14px 0 4px } .md p { margin: 4px 0 } .md ul { margin: 2px 0; padding-left: 18px } .md .tw { overflow-x: auto }
+
+.toast { position: fixed; z-index: 60; right: max(16px, env(safe-area-inset-right, 0px)); bottom: max(16px, env(safe-area-inset-bottom, 0px)); max-width: min(420px, calc(100% - 32px)); background: var(--ink); color: var(--bg); padding: 9px 13px; border-radius: 8px; box-shadow: var(--shadow); font-size: 13px }
+.toast.warn { background: var(--warn); color: #fff } .toast.bad { background: var(--bad); color: #fff }
+.setup { max-width: 620px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 22px; display: flex; flex-direction: column; gap: 12px }
+.setup h2 { margin: 0 }
+.setup code { font-family: var(--mono); font-size: 12.5px; background: var(--surface-2); padding: 1px 5px; border-radius: 4px }
+@media (prefers-reduced-motion: no-preference) { .drawer { animation: slide .16s ease-out } @keyframes slide { from { transform: translateX(24px); opacity: .6 } } }
+</style>
+
+<header class="top" id="top"></header>
+<main class="wrap" id="app"><div class="setup"><h2>Team Board</h2><p class="muted">Loading the board…</p></div></main>
+<aside class="drawer" id="drawer" hidden aria-label="Item details"></aside>
+<div class="scrim" id="scrim" hidden></div>
+<div class="toast" id="toast" hidden></div>
+
+<script type="module">
+/*@@CORE@@*/
+
+// ── setup ──────────────────────────────────────────────────────────────
+const JIRA_SERVER = '@@JIRA_SERVER@@'
+const VIEWS = { team: 'Team', kanban: 'Kanban', list: 'List', ideas: 'Ideas' }
+const COLLS = ['config', 'members', 'projects', 'items', 'events', 'jira', 'reports']
+const FLAG_LABEL = { overdue: 'Overdue', slipped: 'Slipped', stale: 'Stale', blocked: 'Blocked', needsClosing: 'Needs closing' }
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
+const byId = id => document.getElementById(id)
+
+const S = {
+  db: null, user: null, mcp: null, downloads: null, sample: null, canWrite: true, caps: 'loading',
+  loaded: new Set(), error: '', settings: null, counters: null, members: [], projects: [], items: [], events: [], jira: {}, reports: [],
+  ui: loadUi(), drawerId: null, drawerDirty: false, modal: null, selected: new Set(), listLimit: 200, busy: '', dragId: null, jiraBusy: false,
+}
+
+function loadUi() {
+  const base = { view: 'team', f: { project: '', team: '', member: '', type: '', priority: '', status: '', flags: [], archived: false, q: '' }, sort: { key: '', dir: 1 }, feed: 'all' }
+  try {
+    const v = JSON.parse(localStorage.getItem('team-board-ui') || 'null')
+    if (v && typeof v === 'object') return { ...base, ...v, f: { ...base.f, ...(v.f || {}) } }
+  } catch {}
+  return base
+}
+function saveUi() { try { localStorage.setItem('team-board-ui', JSON.stringify(S.ui)) } catch {} }
+
+const settings = () => ({ ...DEFAULT_SETTINGS, ...(S.settings || {}), jira: { ...DEFAULT_SETTINGS.jira, ...((S.settings || {}).jira || {}) }, reports: { ...DEFAULT_SETTINGS.reports, ...((S.settings || {}).reports || {}) } })
+const today = () => todayIn(settings().timezone, Date.now())
+const ctx = () => ({ today: today(), nowIso: new Date().toISOString(), members: S.members, items: S.items })
+const fctx = () => ({ today: today(), settings: settings(), blockers: openBlockers(S.events), jira: S.jira, members: S.members })
+const member = id => S.members.find(m => m.id === id)
+const project = id => S.projects.find(p => p.id === id)
+const item = id => S.items.find(i => i.id === id)
+const nameOf = id => (member(id) || {}).name || id || 'Unassigned'
+const activeMembers = () => S.members.filter(m => m.active !== false).sort((a, b) => a.name.localeCompare(b.name))
+const teams = () => [...new Set(S.members.flatMap(m => m.teams || []))].sort()
+const ready = () => COLLS.every(c => S.loaded.has(c))
+
+function ago(iso) {
+  if (!iso) return 'never'
+  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000)
+  if (s < 90) return 'just now'
+  if (s < 5400) return `${Math.round(s / 60)} min ago`
+  if (s < 129600) return `${Math.round(s / 3600)} h ago`
+  return `${Math.round(s / 86400)} d ago`
+}
+function shortDate(d) {
+  if (!d) return ''
+  const t = today()
+  if (d === t) return 'Today'
+  if (d === addDays(t, 1)) return 'Tomorrow'
+  if (d === addDays(t, -1)) return 'Yesterday'
+  const dt = new Date(d + 'T00:00:00Z')
+  return dt.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' })
+}
+function initials(name) { return String(name || '?').split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('') }
+function hue(id) { let h = 0; for (const ch of String(id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return h % 360 }
+function avatar(id) { const m = member(id); return m ? `<span class="av" title="${esc(m.name)}" style="background:hsl(${hue(id)} 45% 45%)">${esc(initials(m.name))}</span>` : '' }
+
+let toastTimer = 0
+function toast(text, kind = '') {
+  const t = byId('toast')
+  t.textContent = text
+  t.className = `toast ${kind}`
+  t.hidden = false
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => (t.hidden = true), kind ? 6000 : 3500)
+}
+
+// ── capabilities and data ──────────────────────────────────────────────
+async function boot() {
+  const use = name => (window.claude && typeof window.claude.use === 'function' ? window.claude.use(name).catch(() => null) : Promise.resolve(null))
+  const timer = setTimeout(() => { if (!ready()) { S.error = S.db ? 'The board did not finish loading within 10 seconds. It keeps trying; check your connection.' : 'The board’s database is not available in this view.'; render() } }, 10000)
+  const [db, user, mcp, downloads, sample] = await Promise.all(['db', 'user', 'mcp', 'downloads', 'sample'].map(use))
+  Object.assign(S, { db, user, mcp, downloads, sample, caps: 'ready' })
+  if (user) { try { S.canWrite = (await user.isOwner()) !== false } catch { S.canWrite = true } }
+  if (!db) { clearTimeout(timer); S.error = 'The board’s database is not available in this view (signed out, or not allowed). Nothing can be shown or saved here.'; render(); return }
+  const onErr = e => { S.error = `The board could not read its data: ${e && e.message ? e.message : 'unknown error'}.`; render() }
+  for (const name of COLLS) {
+    db.collection(name).onSnapshot(snap => {
+      const docs = snap.docs.map(d => ({ ...d.data(), id: d.id }))
+      if (name === 'config') { S.settings = docs.find(d => d.id === 'settings') || null; S.counters = docs.find(d => d.id === 'counters') || null }
+      else if (name === 'jira') { S.jira = Object.fromEntries(docs.map(d => [d.id, d])) }
+      else S[name] = docs
+      S.loaded.add(name)
+      if (ready()) { clearTimeout(timer); if (S.error.startsWith('The board did not finish')) S.error = '' }
+      render()
+    }, onErr)
+  }
+  render()
+}
+
+function need() {
+  if (!S.db) { toast('The database is not available here.', 'bad'); return false }
+  if (!S.canWrite) { toast('Read-only: only the board’s owner can change it.', 'warn'); return false }
+  return true
+}
+async function put(path, data) { await S.db.doc(path).set(data) }
+async function patchDoc(path, data) { await S.db.doc(path).update(data) }
+
+async function writeChange(it, ch) {
+  if (!need()) return null
+  const r = applyChange(it, ch, ctx())
+  if (r.warnings.length) toast(r.warnings.join(' '), 'warn')
+  if (!Object.keys(r.patch).length) return r
+  try {
+    await patchDoc(`items/${it.id}`, r.patch)
+    for (const e of r.events) await put(`events/${e.id}`, e)
+  } catch (err) { toast(`Not saved: ${err.message || err}`, 'bad') }
+  return r
+}
+
+async function takeIds(kind, n = 1) {
+  const snap = await S.db.doc('config/counters').get()
+  let c = (snap.exists && snap.data()) || { idea: 0, task: 0 }
+  const ids = []
+  for (let i = 0; i < n; i++) { const x = nextId(kind, c); ids.push(x.id); c = x.counters }
+  await put('config/counters', c)
+  return ids
+}
+
+async function createItem(kind, fields) {
+  if (!need()) return null
+  const [id] = await takeIds(kind)
+  const made = newItem(kind, id, fields, ctx())
+  await put(`items/${id}`, made.item)
+  for (const e of made.events) await put(`events/${e.id}`, e)
+  if (made.item.jiraKeys && made.item.jiraKeys.length) validateKeys(made.item.jiraKeys)
+  return made.item
+}
+
+// ── Jira (read only) ───────────────────────────────────────────────────
+function payloadOf(res) {
+  if (!res) return {}
+  if (res.payload !== undefined && res.payload !== null) return typeof res.payload === 'string' ? safeJson(res.payload) : res.payload
+  if (res.structuredContent) return res.structuredContent
+  const text = (res.content || []).map(b => (b && b.type === 'text' ? b.text : '')).join('')
+  return safeJson(text)
+}
+function safeJson(t) { try { return JSON.parse(t) } catch { return { text: t } } }
+async function jiraCall(tool, input) {
+  try { return payloadOf(await S.mcp.callTool(JIRA_SERVER, tool, input)) }
+  catch (e) {
+    if (e && e.retryable) { await new Promise(r => setTimeout(r, e.retryAfterMs || 1500)); return payloadOf(await S.mcp.callTool(JIRA_SERVER, tool, input)) }
+    throw e
+  }
+}
+const accessLost = e => e && ['needs_reauth', 'not_granted', 'blocked_by_policy', 'consent_required', 'user_changed'].includes(e.code)
+async function ensureCloud() {
+  const s = settings()
+  if (s.jira.cloudId) return s.jira.cloudId
+  const p = await jiraCall('getAccessibleAtlassianResources', {})
+  const list = Array.isArray(p) ? p : Array.isArray(p.resources) ? p.resources : Array.isArray(p.data) ? p.data : (p.data && p.data.resources) || []
+  const site = list.find(x => (x.scopes || []).some(sc => /jira/.test(sc)) || (x.products || []).some(pr => pr.id === 'jira')) || list[0]
+  if (!site) throw new Error('No Atlassian site is reachable through your connection.')
+  if (S.canWrite) await patchDoc('config/settings', { jira: { ...s.jira, cloudId: site.id || site.cloudId, baseUrl: site.url || null } })
+  return site.id || site.cloudId
+}
+async function saveSnap(key, snap) {
+  const old = S.jira[key]
+  await put(`jira/${key}`, snap)
+  if (old && old.status && snap.status && old.status !== snap.status) {
+    for (const it of S.items.filter(i => !i.archived && [...(i.jiraKeys || []), ...(i.jiraRefs || [])].includes(key))) {
+      const e = systemEvent(it.id, 'jira_refreshed', `Jira ${key}: ${old.status} → ${snap.status}`, { key, from: old.status, to: snap.status }, ctx())
+      await put(`events/${e.id}`, e)
+    }
+  }
+}
+async function fetchOne(cloudId, key) {
+  const nowIso = new Date().toISOString()
+  try {
+    const p = await jiraCall('getJiraIssue', { cloudId, issueIdOrKey: key, fields: JIRA_FIELDS })
+    const issue = issuesFrom(p)[0]
+    if (!issue) throw Object.assign(new Error('not found'), { code: 'not_found' })
+    await saveSnap(key, jiraSnapshot(issue, nowIso))
+  } catch (e) {
+    const lost = accessLost(e)
+    await put(`jira/${key}`, { key, summary: lost ? '' : (S.jira[key] || {}).summary || '', status: lost ? '' : (S.jira[key] || {}).status || '', statusCategory: lost ? '' : (S.jira[key] || {}).statusCategory || '', assigneeAccountId: null, assigneeName: null, priority: null, created: null, updated: null, resolutionDate: null, fetchedAt: nowIso, error: lost ? 'access lost' : 'not found or no access' })
+    if (lost) throw e
+  }
+}
+async function validateKeys(keys) {
+  if (!S.mcp || !S.canWrite) return
+  try { const cloudId = await ensureCloud(); for (const k of keys) await fetchOne(cloudId, k) }
+  catch (e) { toast(`Jira: ${e.message || e.code || e}`, 'warn') }
+}
+async function refreshJira() {
+  if (!S.mcp) { toast('Jira is not connected to this page.', 'warn'); return }
+  if (!need() || S.jiraBusy) return
+  S.jiraBusy = true
+  render()
+  let done = 0
+  try {
+    const cloudId = await ensureCloud()
+    const chunks = jiraChunks(S.items, 10)
+    for (const chunk of chunks) {
+      const nowIso = new Date().toISOString()
+      try {
+        const p = await jiraCall('searchJiraIssuesUsingJql', { cloudId, jql: `key in (${chunk.join(', ')})`, fields: JIRA_FIELDS, maxResults: chunk.length })
+        if (p && typeof p.text === 'string' && !p.issues) throw new Error('unreadable answer')
+        const found = new Map(issuesFrom(p).map(i => [String(i.key).toUpperCase(), i]))
+        for (const k of chunk) { if (found.has(k)) await saveSnap(k, jiraSnapshot(found.get(k), nowIso)); else await fetchOne(cloudId, k) }
+      } catch (e) {
+        if (accessLost(e)) throw e
+        for (const k of chunk) await fetchOne(cloudId, k)
+      }
+      done += chunk.length
+    }
+    await patchDoc('config/settings', { jira: { ...settings().jira, lastRefreshedAt: new Date().toISOString() } })
+    toast(done ? `Refreshed ${done} Jira ticket${done === 1 ? '' : 's'}.` : 'No Jira keys on open items.')
+  } catch (e) {
+    toast(accessLost(e) ? 'Jira access was lost: reconnect Atlassian for this page, then refresh.' : `Jira refresh stopped: ${e.message || e.code || e}`, 'bad')
+  } finally { S.jiraBusy = false; render() }
+}
+
+// ── rendering ──────────────────────────────────────────────────────────
+function render() {
+  renderTop()
+  const keep = [...document.querySelectorAll('[data-keep]')].map(el => [el.dataset.keep, el.scrollLeft, el.scrollTop])
+  byId('app').innerHTML = renderMain()
+  for (const [k, l, t] of keep) { const el = document.querySelector(`[data-keep="${k}"]`); if (el) { el.scrollLeft = l; el.scrollTop = t } }
+  renderDrawer()
+}
+
+function renderTop() {
+  const s = settings()
+  const has = ready() && S.settings
+  const jiraTitle = !S.mcp ? 'Jira is not connected to this page' : `Last refreshed ${ago(s.jira.lastRefreshedAt)}`
+  const counts = { team: S.items.filter(i => i.type === 'task' && !i.archived && isOngoing(i)).length, kanban: S.items.filter(i => i.type === 'task' && !i.archived).length, list: S.items.filter(i => !i.archived).length, ideas: S.items.filter(i => i.type === 'idea' && !i.archived).length }
+  byId('top').innerHTML = `
+  <div class="bar wrap">
+    <div class="brand">Team Board <small>${has ? `${esc(today())} · ${esc(s.timezone)}` : ''}</small></div>
+    ${has ? `
+    <button class="btn" data-act="new:idea">+ New idea</button>
+    <button class="btn primary" data-act="new:task">+ New task</button>
+    <button class="btn" data-act="refresh-jira" ${!S.mcp || S.jiraBusy ? 'disabled' : ''} title="${esc(jiraTitle)}">${S.jiraBusy ? 'Refreshing Jira…' : 'Refresh Jira'} <span class="sub">${S.mcp ? esc(ago(s.jira.lastRefreshedAt)) : 'unavailable'}</span></button>
+    <button class="btn" data-act="reports">Reports</button>
+    <button class="btn" data-act="settings">Settings</button>` : ''}
+  </div>
+  ${has ? `${renderFilters()}
+  <nav class="tabs wrap" aria-label="Views">${Object.entries(VIEWS).map(([k, v]) => `<button class="tab ${S.ui.view === k ? 'on' : ''}" data-act="view:${k}">${v}<span class="n">${counts[k]}</span></button>`).join('')}</nav>` : ''}`
+}
+
+function opt(value, label, cur) { return `<option value="${esc(value)}" ${String(cur ?? '') === String(value) ? 'selected' : ''}>${esc(label)}</option>` }
+function renderFilters() {
+  const f = S.ui.f
+  const any = f.project || f.team || f.member || f.type || f.priority || f.status || f.flags.length || f.archived || f.q
+  const stages = f.type === 'idea' ? IDEA_STAGES : f.type === 'task' ? TASK_STAGES : [...TASK_STAGES, ...IDEA_STAGES]
+  return `<div class="filters wrap" role="group" aria-label="Filters">
+    <select id="f-project" data-filter="project" aria-label="Project">${opt('', 'All projects', f.project)}${S.projects.map(p => opt(p.id, p.name, f.project)).join('')}</select>
+    <select id="f-team" data-filter="team" aria-label="Team">${opt('', 'All teams', f.team)}${teams().map(t => opt(t, t, f.team)).join('')}</select>
+    <select id="f-member" data-filter="member" aria-label="Member">${opt('', 'Everyone', f.member)}${activeMembers().filter(m => !f.team || (m.teams || []).includes(f.team)).map(m => opt(m.id, m.name, f.member)).join('')}</select>
+    <select id="f-type" data-filter="type" aria-label="Type">${opt('', 'Ideas and tasks', f.type)}${opt('task', 'Tasks', f.type)}${opt('idea', 'Ideas', f.type)}</select>
+    <select id="f-priority" data-filter="priority" aria-label="Priority">${opt('', 'Any priority', f.priority)}${PRIORITIES.map(p => opt(p, PRIORITY_LABEL[p], f.priority)).join('')}</select>
+    <select id="f-status" data-filter="status" aria-label="Status">${opt('', 'Any status', f.status)}${stages.map(s => opt(s, STAGE_LABEL[s], f.status)).join('')}</select>
+    ${Object.entries(FLAG_LABEL).map(([k, v]) => `<label class="chk ${f.flags.includes(k) ? 'on' : ''}"><input type="checkbox" data-flag="${k}" ${f.flags.includes(k) ? 'checked' : ''}>${v}</label>`).join('')}
+    <label class="chk ${f.archived ? 'on' : ''}"><input type="checkbox" id="f-archived" data-filter-bool="archived" ${f.archived ? 'checked' : ''}>Show archived</label>
+    <input type="search" id="f-q" data-filter="q" placeholder="Search title, ID, Jira key" value="${esc(f.q)}" aria-label="Search">
+    ${any ? '<button class="btn small ghost" data-act="clear-filters">Clear</button>' : ''}
+  </div>`
+}
+
+function renderMain() {
+  if (S.error && !ready()) return `<div class="banner bad">${esc(S.error)}</div>`
+  if (!ready()) return `<div class="setup"><h2>Team Board</h2><p class="muted">Loading the board…</p></div>`
+  if (!S.settings) return renderSetup()
+  const banners = []
+  if (S.error) banners.push(`<div class="banner bad">${esc(S.error)}</div>`)
+  if (!S.canWrite) banners.push('<div class="banner">Read-only: you can look around, but only the board’s owner can change it.</div>')
+  if (!S.projects.length) banners.push('<div class="banner warn">Add a project in Settings before capturing work: every idea and task belongs to one. <button class="btn small" data-act="settings">Open Settings</button></div>')
+  const inactive = S.members.filter(m => m.active === false).map(m => [m, S.items.filter(i => isOpenTask(i) && !i.archived && i.assigneeId === m.id)]).filter(([, l]) => l.length)
+  for (const [m, l] of inactive) banners.push(`<div class="banner warn">${esc(m.name)} is inactive but still has ${l.length} open task${l.length === 1 ? '' : 's'}. <button class="btn small" data-act="reassign-all:${esc(m.id)}">Reassign all</button></div>`)
+  const view = { team: viewTeam, kanban: viewKanban, list: viewList, ideas: viewIdeas }[S.ui.view] || viewTeam
+  return banners.join('') + view()
+}
+
+function renderSetup() {
+  return `<div class="setup">
+    <h2>Set up Team Board</h2>
+    <p>The board is empty: no settings, roster or projects yet.</p>
+    <p class="muted">Create the default settings here, then add your team and projects in Settings. Or run <code>/board-setup</code> in Claude Code to do it from a conversation.</p>
+    <div><button class="btn primary" data-act="init" ${S.canWrite ? '' : 'disabled'}>Create settings</button></div>
+  </div>`
+}
+
+function filtered(extra = {}) { return filterItems(S.items, { ...S.ui.f, ...extra }, fctx()) }
+
+function card(it, opts = {}) {
+  const fl = flagsFor(it, fctx())
+  const p = project(it.projectId)
+  const people = it.type === 'task' ? [it.assigneeId, ...(it.collaboratorIds || [])].filter(Boolean) : [it.ownerId].filter(Boolean)
+  const keys = it.jiraKeys || it.jiraRefs || []
+  const badges = []
+  if (fl.overdue) badges.push('<span class="badge bad">Overdue</span>')
+  if (fl.slipped) badges.push(`<span class="badge warn" title="ETA moved from ${esc(it.etaOriginal)}">+${fl.slipDays}d</span>`)
+  if (fl.blocked) badges.push('<span class="badge bad">Blocked</span>')
+  if (fl.stale) badges.push('<span class="badge warn">Stale</span>')
+  if (fl.needsClosing) badges.push('<span class="badge ok" title="Every linked Jira ticket is done">Needs closing</span>')
+  if (fl.mismatch) badges.push('<span class="badge info" title="Jira shows someone else as assignee">Jira assignee differs</span>')
+  if (it.archived) badges.push('<span class="badge">Archived</span>')
+  if (opts.stage) badges.push(`<span class="badge">${esc(STAGE_LABEL[it.status])}</span>`)
+  return `<div class="card p-${esc(it.priority)}" draggable="${S.canWrite}" data-drag="${esc(it.id)}" data-before="${esc(it.id)}" data-act="open:${esc(it.id)}" tabindex="0" role="button" aria-label="${esc(it.id)} ${esc(it.title)}">
+    <div class="card-top"><span class="mono">${esc(it.id)}</span><span class="pill ${esc(it.priority)}">${esc(PRIORITY_LABEL[it.priority] || it.priority)}</span><span class="proj">${esc(p ? p.name : '')}</span></div>
+    <div class="card-title">${esc(it.title)}</div>
+    <div class="card-meta">${people.length ? `<span class="avs">${people.map(avatar).join('')}</span>` : ''}${it.etaCurrent ? `<span class="eta ${fl.overdue ? 'late' : ''}">ETA ${esc(shortDate(it.etaCurrent))}</span>` : ''}${badges.join('')}${keys.map(jchip).join('')}</div>
+  </div>`
+}
+function jchip(k) {
+  const j = S.jira[k]
+  const cls = !j ? '' : j.error ? 'err' : j.statusCategory
+  const title = !j ? 'Not fetched yet' : j.error ? `${j.error} (${ago(j.fetchedAt)})` : `${j.status} · fetched ${ago(j.fetchedAt)}`
+  return `<span class="jchip ${esc(cls)}" title="${esc(title)}">${esc(k)}${j && !j.error && j.status ? ` · ${esc(j.status)}` : ''}</span>`
+}
+
+function viewTeam() {
+  const s = settings()
+  const tasks = filtered({ type: 'task' })
+  const wip = wipOver(S.items, s.wipLimit)
+  const t = today()
+  const cols = activeMembers().filter(m => (!S.ui.f.team || (m.teams || []).includes(S.ui.f.team)) && (!S.ui.f.member || m.id === S.ui.f.member))
+  const extra = S.members.filter(m => m.active === false && tasks.some(i => i.assigneeId === m.id && isOpenTask(i)))
+  const col = (m, id) => {
+    const mine = tasks.filter(i => (id === 'unassigned' ? !i.assigneeId : i.assigneeId === id))
+    const ongoing = mine.filter(isOngoing).sort(byQueue)
+    const next = mine.filter(i => (i.status === 'assigned' || i.status === 'backlog')).sort(id === 'unassigned' ? byPriority : byQueue)
+    const done = id === 'unassigned' ? [] : mine.filter(i => i.status === 'done' && i.endDate && daysBetween(i.endDate, t) <= s.recentlyDoneDays).sort((a, b) => String(b.endDate).localeCompare(String(a.endDate)))
+    const sec = (key, label, list, extraLabel = '') => `<div class="sec" data-drop="team:${esc(id)}:${key}"><div class="sec-label">${label} <span class="mono">${list.length}</span>${extraLabel}</div>${list.map(i => card(i)).join('') || '<div class="empty">Nothing here</div>'}</div>`
+    return `<section class="col" aria-label="${esc(m ? m.name : 'Unassigned')}">
+      <div class="col-head">${m ? avatar(m.id) : ''}<div style="min-width:0"><div class="name">${esc(m ? m.name : 'Unassigned')}${m && m.active === false ? ' <span class="badge warn">Inactive</span>' : ''}${m && m.isSenior ? ' <span class="badge">Senior</span>' : ''}</div><div class="teams">${esc(m ? (m.teams || []).join(' · ') : 'Pick up from here')}</div></div><span class="count">${mine.filter(isOpenTask).length} open</span></div>
+      ${id === 'unassigned' ? sec('next', 'Waiting', next) : sec('ongoing', 'Ongoing', ongoing, wip[id] ? `<span class="wip">over WIP limit (${s.wipLimit})</span>` : '') + sec('next', 'Up next', next) + sec('done', `Done, last ${s.recentlyDoneDays} days`, done)}
+    </section>`
+  }
+  if (!S.members.length) return '<div class="banner warn">No team members yet. Add them in Settings. <button class="btn small" data-act="settings">Open Settings</button></div>'
+  return `<div class="board" data-keep="team">${[...cols, ...extra].map(m => col(m, m.id)).join('')}${S.ui.f.member ? '' : col(null, 'unassigned')}</div>`
+}
+
+function viewKanban() {
+  const ideas = S.ui.f.type === 'idea'
+  const list = filtered(ideas ? { type: 'idea' } : { type: 'task' })
+  const stages = ideas ? IDEA_STAGES : TASK_STAGES
+  return `${ideas ? '' : '<p class="muted" style="margin:0 0 10px">Tasks by stage. Choose “Ideas” in the type filter to see ideas by stage instead.</p>'}<div class="board kanban" data-keep="kanban">${stages.map(st => {
+    const l = list.filter(i => i.status === st).sort(byPriority)
+    return `<section class="col"><div class="col-head"><span class="name">${STAGE_LABEL[st]}</span><span class="count">${l.length}</span></div><div class="sec" data-drop="stage:${st}">${l.map(i => card(i)).join('') || '<div class="empty">Drop here</div>'}</div></section>`
+  }).join('')}</div>`
+}
+
+const LIST_COLS = [['id', 'ID'], ['title', 'Title'], ['type', 'Type'], ['project', 'Project'], ['priority', 'Priority'], ['status', 'Status'], ['person', 'Assignee / owner'], ['eta', 'ETA'], ['flags', 'Flags'], ['jira', 'Jira']]
+function viewList() {
+  const { key, dir } = S.ui.sort
+  const rows = filtered()
+  const val = (i, k) => k === 'project' ? (project(i.projectId) || {}).name || '' : k === 'person' ? nameOf(i.assigneeId || i.ownerId) : k === 'eta' ? i.etaCurrent || '9999' : k === 'status' ? (i.type === 'task' ? TASK_STAGES : IDEA_STAGES).indexOf(i.status) : k === 'priority' ? PRIORITIES.indexOf(i.priority) : String(i[k] ?? '')
+  rows.sort(key ? (a, b) => { const x = val(a, key), y = val(b, key); return (x < y ? -1 : x > y ? 1 : byPriority(a, b)) * dir } : byPriority)
+  for (const id of [...S.selected]) if (!rows.some(r => r.id === id)) S.selected.delete(id)
+  const shown = rows.slice(0, S.listLimit)
+  const fx = fctx()
+  const sel = S.selected.size
+  const bulk = sel ? `<div class="bulk"><b>${sel} selected</b>
+    <select id="bulk-assignee" data-bulk="assigneeId" aria-label="Reassign"><option value="">Reassign…</option>${opt('__none', 'Unassign', '')}${activeMembers().map(m => opt(m.id, m.name, '')).join('')}</select>
+    <select id="bulk-priority" data-bulk="priority" aria-label="Set priority"><option value="">Priority…</option>${PRIORITIES.map(p => opt(p, PRIORITY_LABEL[p], '')).join('')}</select>
+    <select id="bulk-project" data-bulk="projectId" aria-label="Set project"><option value="">Project…</option>${S.projects.map(p => opt(p.id, p.name, '')).join('')}</select>
+    <select id="bulk-status" data-bulk="status" aria-label="Set status"><option value="">Status…</option>${[...TASK_STAGES, ...IDEA_STAGES].map(s => opt(s, STAGE_LABEL[s], '')).join('')}</select>
+    <button class="btn small" data-act="bulk-archive">Archive</button><button class="btn small ghost" data-act="bulk-clear">Clear selection</button></div>` : ''
+  return `${bulk}<div class="tablewrap" data-keep="list"><table class="list"><thead><tr><th><input type="checkbox" id="sel-all" data-act="sel-all" aria-label="Select all" ${sel && sel === rows.length ? 'checked' : ''}></th>${LIST_COLS.map(([k, l]) => `<th>${['flags', 'jira'].includes(k) ? l : `<button data-act="sort:${k}">${l}${key === k ? (dir > 0 ? ' ↑' : ' ↓') : ''}</button>`}</th>`).join('')}</tr></thead>
+    <tbody data-drop="list">${shown.map(i => {
+      const fl = flagsFor(i, fx)
+      return `<tr class="row" draggable="${S.canWrite && !key}" data-drag="${esc(i.id)}" data-before="${esc(i.id)}" data-act="open:${esc(i.id)}">
+        <td><input type="checkbox" data-act="sel:${esc(i.id)}" aria-label="Select ${esc(i.id)}" ${S.selected.has(i.id) ? 'checked' : ''}></td>
+        <td class="mono">${esc(i.id)}</td><td class="title">${esc(i.title)}${i.archived ? ' <span class="badge">Archived</span>' : ''}</td><td>${i.type === 'idea' ? 'Idea' : 'Task'}</td>
+        <td>${esc((project(i.projectId) || {}).name || '')}</td><td><span class="pill ${esc(i.priority)}">${esc(PRIORITY_LABEL[i.priority])}</span></td><td>${esc(STAGE_LABEL[i.status])}</td>
+        <td>${esc(i.type === 'task' ? (i.assigneeId ? nameOf(i.assigneeId) : '') : nameOf(i.ownerId))}</td>
+        <td class="mono ${fl.overdue ? 'eta late' : ''}">${esc(i.etaCurrent || '')}</td>
+        <td>${Object.keys(FLAG_LABEL).filter(k => fl[k]).map(k => `<span class="badge ${k === 'needsClosing' ? 'ok' : k === 'slipped' || k === 'stale' ? 'warn' : 'bad'}">${FLAG_LABEL[k]}</span>`).join(' ')}</td>
+        <td>${(i.jiraKeys || i.jiraRefs || []).map(jchip).join(' ')}</td></tr>`
+    }).join('') || `<tr><td colspan="11" class="muted">No items match these filters.</td></tr>`}</tbody></table></div>
+    ${rows.length > shown.length ? `<p class="muted">Showing ${shown.length} of ${rows.length}. <button class="btn small" data-act="list-more">Show 200 more</button></p>` : ''}
+    ${key ? '<p class="muted">Sorted by a column: clear the sort (click it until the arrow goes) to drag rows into order.</p>' : ''}`
+}
+
+function viewIdeas() {
+  const list = filtered({ type: 'idea' })
+  return PRIORITIES.map(p => {
+    const l = list.filter(i => i.priority === p).sort(byPriority)
+    return `<section class="band"><h3><span class="pill ${p}">${PRIORITY_LABEL[p]}</span><span class="muted mono">${l.length}</span></h3><div class="sec" data-drop="ideas:${p}">${l.map(i => `
+      <div class="idea" draggable="${S.canWrite}" data-drag="${esc(i.id)}" data-before="${esc(i.id)}">
+        <span class="mono muted">${esc(i.id)}</span>
+        <div class="t" data-act="open:${esc(i.id)}">${esc(i.title)}<div class="muted" style="font-size:12px;font-weight:400">${esc((project(i.projectId) || {}).name || '')}${(i.convertedTaskIds || []).length ? ` · tasks ${esc(i.convertedTaskIds.join(', '))}` : ''}</div></div>
+        <div class="ctl">
+          <select id="is-${esc(i.id)}" data-ideastage="${esc(i.id)}" aria-label="Stage">${IDEA_STAGES.map(s => opt(s, STAGE_LABEL[s], i.status)).join('')}</select>
+          <select id="io-${esc(i.id)}" data-ideaowner="${esc(i.id)}" aria-label="Owner">${opt('', 'No owner', i.ownerId || '')}${activeMembers().map(m => opt(m.id, m.name, i.ownerId || '')).join('')}</select>
+          ${['approved', 'discussing'].includes(i.status) ? `<button class="btn small" data-act="convert:${esc(i.id)}">Convert to tasks</button>` : ''}
+        </div>
+      </div>`).join('') || '<div class="empty">No ideas at this level</div>'}</div></section>`
+  }).join('')
+}
+
+// ── drawer ─────────────────────────────────────────────────────────────
+function renderDrawer() {
+  const el = byId('drawer')
+  const it = S.drawerId && item(S.drawerId)
+  if (!it) { el.hidden = true; el.innerHTML = ''; return }
+  if (el.contains(document.activeElement) && !el.hidden && el.dataset.id === it.id && document.activeElement.matches('input, textarea, select')) { S.drawerDirty = true; return }
+  const keep = el.querySelector('.dr-body') ? el.querySelector('.dr-body').scrollTop : 0
+  el.hidden = false
+  el.dataset.id = it.id
+  el.innerHTML = drawerHtml(it)
+  const body = el.querySelector('.dr-body')
+  if (body) body.scrollTop = keep
+  S.drawerDirty = false
+}
+
+function dateField(it, field, label) {
+  const manual = (it.manualDateFlags || []).includes(field)
+  return `<label class="f"><span>${label}${manual ? ' <em class="edited">edited</em>' : ''}</span><input type="date" id="d-${field}" data-field="${field}" value="${esc(it[field] || '')}"></label>`
+}
+
+function drawerHtml(it) {
+  const fl = flagsFor(it, fctx())
+  const isTask = it.type === 'task'
+  const evs = S.events.filter(e => e.itemId === it.id).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+  const shownEvs = S.ui.feed === 'notes' ? evs.filter(e => e.kind === 'note') : evs
+  const seniors = activeMembers().filter(m => m.isSenior && m.id !== it.assigneeId)
+  const keys = isTask ? it.jiraKeys || [] : it.jiraRefs || []
+  const base = settings().jira.baseUrl
+  const flagBadges = [fl.overdue && '<span class="badge bad">Overdue</span>', fl.slipped && `<span class="badge warn">Slipped ${fl.slipDays}d</span>`, fl.stale && '<span class="badge warn">Stale</span>', fl.blocked && '<span class="badge bad">Blocked</span>', fl.needsClosing && '<span class="badge ok">Needs closing: every Jira ticket is done</span>', fl.mismatch && '<span class="badge info">Jira assignee differs</span>', it.archived && '<span class="badge">Archived</span>'].filter(Boolean)
+  const memberOpts = cur => opt('', 'Unassigned', cur || '') + [...activeMembers(), ...S.members.filter(m => m.active === false && m.id === cur)].map(m => opt(m.id, m.name + (m.active === false ? ' (inactive)' : ''), cur || '')).join('')
+  const src = it.sourceIdeaId && item(it.sourceIdeaId)
+  return `
+  <div class="dr-head"><span class="mono">${esc(it.id)}</span><span class="badge">${isTask ? 'Task' : 'Idea'}</span><span class="muted" style="font-size:12px;margin-left:auto">Updated ${esc(ago(it.updatedAt))}</span><button class="btn small ghost" data-act="close-drawer" aria-label="Close">✕</button></div>
+  <div class="dr-body">
+    <div><input class="dr-title" id="d-title" data-field="title" value="${esc(it.title)}" maxlength="120" aria-label="Title">${flagBadges.length ? `<div class="card-meta" style="margin-top:6px">${flagBadges.join('')}</div>` : ''}</div>
+    <div class="fields">
+      <label class="f"><span>Project</span><select id="d-project" data-field="projectId">${opt('', 'No project', it.projectId || '')}${S.projects.map(p => opt(p.id, p.name, it.projectId || '')).join('')}</select></label>
+      <label class="f"><span>Priority</span><select id="d-priority" data-field="priority">${PRIORITIES.map(p => opt(p, PRIORITY_LABEL[p], it.priority)).join('')}</select></label>
+      <label class="f"><span>${isTask ? 'Stage' : 'Stage'}</span><select id="d-status" data-field="status">${(isTask ? TASK_STAGES : IDEA_STAGES).map(s => opt(s, STAGE_LABEL[s], it.status)).join('')}</select></label>
+      ${isTask ? `<label class="f"><span>Assignee</span><select id="d-assignee" data-field="assigneeId">${memberOpts(it.assigneeId)}</select></label>
+      <label class="f"><span>ETA${it.etaOriginal && it.etaOriginal !== it.etaCurrent ? ` <em class="edited">first ${esc(it.etaOriginal)}</em>` : ''}</span><input type="date" id="d-eta" data-field="eta" value="${esc(it.etaCurrent || '')}"></label>
+      ${dateField(it, 'startDate', 'Started')}${dateField(it, 'reviewRequestedAt', 'Review requested')}${dateField(it, 'endDate', 'Ended')}
+      <label class="f"><span>Reviewed by (seniors)</span><select id="d-reviewer" data-field="reviewedBy">${opt('', 'No reviewer', it.reviewedBy || '')}${seniors.map(m => opt(m.id, m.name, it.reviewedBy || '')).join('')}${it.reviewedBy && !seniors.some(m => m.id === it.reviewedBy) ? opt(it.reviewedBy, nameOf(it.reviewedBy), it.reviewedBy) : ''}</select></label>
+      ${dateField(it, 'reviewedOn', 'Reviewed on')}
+      <label class="f" style="grid-column:1/-1"><span>Review note</span><input id="d-reviewnote" data-field="reviewNote" value="${esc(it.reviewNote || '')}"></label>`
+      : `<label class="f"><span>Owner</span><select id="d-owner" data-field="ownerId">${memberOpts(it.ownerId)}</select></label>`}
+    </div>
+    ${isTask ? `<div class="block"><h4>Collaborators</h4><div class="collab">${activeMembers().filter(m => m.id !== it.assigneeId).map(m => `<label class="chk ${(it.collaboratorIds || []).includes(m.id) ? 'on' : ''}"><input type="checkbox" data-collab="${esc(m.id)}" ${(it.collaboratorIds || []).includes(m.id) ? 'checked' : ''}>${esc(m.name)}</label>`).join('') || '<span class="muted">No one else on the roster.</span>'}</div></div>` : ''}
+    <label class="f"><span>Description</span><textarea id="d-desc" data-field="description" rows="4">${esc(it.description || '')}</textarea></label>
+    ${!isTask ? `<label class="f"><span>Rationale</span><textarea id="d-rationale" data-field="rationale" rows="3">${esc(it.rationale || '')}</textarea></label>
+    <label class="f"><span>Decision</span><textarea id="d-decision" data-field="decision" rows="2">${esc(it.decision || '')}</textarea></label>` : ''}
+    <div class="block"><h4>Jira ${keys.length ? `<span class="mono">${keys.length}</span>` : ''}<span class="muted" style="text-transform:none;letter-spacing:0">read only</span></h4>
+      ${keys.map(k => { const j = S.jira[k]; return `<div class="jrow">${jchip(k)}<div class="s">${j ? (j.error ? `<span class="badge bad">${esc(j.error)}</span>` : `${base ? `<a href="${esc(base)}/browse/${esc(k)}" target="_blank" rel="noopener">${esc(j.summary || k)}</a>` : esc(j.summary || '')}<div class="muted">${esc([j.assigneeName && `Jira assignee ${j.assigneeName}`, j.priority && `priority ${j.priority}`, j.updated && `updated ${String(j.updated).slice(0, 10)}`].filter(Boolean).join(' · '))}</div>`) : '<span class="muted">Not fetched yet</span>'}<div class="muted" style="font-size:11px">${j ? `fetched ${esc(ago(j.fetchedAt))}` : ''}</div></div><button class="btn small ghost" data-act="unlink:${esc(k)}" aria-label="Remove ${esc(k)}">✕</button></div>` }).join('')}
+      <div class="row-actions" style="margin-top:6px"><input class="inp" id="d-jira" placeholder="Key or link, e.g. APP-123" style="flex:1"><button class="btn small" data-act="link-key">Add</button></div></div>
+    ${isTask ? `<div class="block"><h4>Assignment history</h4><ul class="hist">${(it.assignmentHistory || []).map(h => `<li>${esc(nameOf(h.memberId))} <span class="muted mono">${esc(h.from)} → ${esc(h.to || 'now')}</span></li>`).join('') || '<li class="muted">Never assigned</li>'}</ul></div>
+    <div class="block"><h4>ETA history</h4><ul class="hist">${(it.etaHistory || []).map(h => `<li class="mono">${esc(h.date)} <span class="muted">set ${esc(h.changedOn)}</span></li>`).join('') || '<li class="muted">No ETA yet</li>'}</ul></div>` : ''}
+    ${src ? `<div class="block"><h4>From idea</h4><button class="btn small" data-act="open:${esc(src.id)}">${esc(src.id)} ${esc(src.title)}</button></div>` : ''}
+    ${!isTask && (it.convertedTaskIds || []).length ? `<div class="block"><h4>Converted tasks</h4><div class="row-actions">${it.convertedTaskIds.map(id => `<button class="btn small" data-act="open:${esc(id)}">${esc(id)} ${esc((item(id) || {}).title || '')}</button>`).join('')}</div></div>` : ''}
+    <div class="block"><h4>Notes and activity <span class="seg"><button class="${S.ui.feed === 'notes' ? 'on' : ''}" data-act="feed:notes">Notes only</button><button class="${S.ui.feed !== 'notes' ? 'on' : ''}" data-act="feed:all">Everything</button></span></h4>
+      <div class="row-actions" style="align-items:flex-start;margin-bottom:10px"><select class="inp" id="d-tag" style="width:auto" aria-label="Note tag"><option value="">No tag</option>${NOTE_TAGS.map(t => `<option value="${t}">${t[0].toUpperCase() + t.slice(1)}</option>`).join('')}</select><textarea class="inp" id="d-note" rows="2" placeholder="Add a note" style="flex:1;min-height:40px"></textarea><button class="btn small primary" data-act="note-add">Add</button></div>
+      <div class="feed">${shownEvs.map(evHtml).join('') || '<div class="muted">Nothing yet.</div>'}</div></div>
+    <div class="row-actions" style="border-top:1px solid var(--line);padding-top:12px">
+      ${!isTask && ['approved', 'discussing'].includes(it.status) ? `<button class="btn" data-act="convert:${esc(it.id)}">Convert to tasks</button>` : ''}
+      ${isTask && it.assigneeId ? `<button class="btn" data-act="queue-top:${esc(it.id)}">Move to top of ${esc(nameOf(it.assigneeId))}’s queue</button>` : ''}
+      ${it.archived ? `<button class="btn" data-act="restore:${esc(it.id)}">Restore</button><button class="btn danger" data-act="delete:${esc(it.id)}">Delete permanently</button>` : `<button class="btn" data-act="archive:${esc(it.id)}">Archive</button>`}
+    </div>
+  </div>`
+}
+
+function evHtml(e) {
+  if (e.kind !== 'note') return `<div class="ev system"><div class="meta"><span>${esc(String(e.createdAt).slice(0, 16).replace('T', ' '))}</span></div>${esc(e.body)}</div>`
+  return `<div class="ev note ${esc(e.tag || '')}" id="ev-${esc(e.id)}">
+    <div class="meta">${e.tag ? `<span class="badge ${e.tag === 'blocker' ? (e.resolved ? '' : 'bad') : e.tag === 'decision' ? 'ok' : 'info'}">${esc(e.tag)}${e.tag === 'blocker' && e.resolved ? ' · resolved' : ''}</span>` : ''}<span>${esc(String(e.createdAt).slice(0, 16).replace('T', ' '))}</span>${e.editedAt ? '<span>edited</span>' : ''}
+    <button class="btn small ghost" data-act="note-edit:${esc(e.id)}">Edit</button>${e.tag === 'blocker' ? `<button class="btn small ghost" data-act="note-resolve:${esc(e.id)}">${e.resolved ? 'Reopen' : 'Resolve'}</button>` : ''}</div>
+    <div class="body">${esc(e.body)}</div></div>`
+}
+
+// ── modals ─────────────────────────────────────────────────────────────
+function openModal(html, wide = false) {
+  const el = byId('scrim')
+  el.innerHTML = `<div class="modal ${wide ? 'wide' : ''}" role="dialog" aria-modal="true">${html}</div>`
+  el.hidden = false
+  const first = el.querySelector('input:not([type=checkbox]), textarea, select')
+  if (first) first.focus()
+}
+function closeModal() { const el = byId('scrim'); el.hidden = true; el.innerHTML = ''; S.modal = null; if (S.confirmResolve) { S.confirmResolve({ ok: false }); S.confirmResolve = null } }
+
+function confirmBox(text, { ok = 'Confirm', option = '', optionOn = true, danger = false } = {}) {
+  return new Promise(resolve => {
+    S.modal = 'confirm'
+    openModal(`<h2>${esc(text)}</h2>${option ? `<label class="chk on" style="align-self:flex-start"><input type="checkbox" id="confirm-opt" ${optionOn ? 'checked' : ''}>${esc(option)}</label>` : ''}<div class="actions"><button class="btn" data-act="close-modal">Cancel</button><button class="btn ${danger ? 'danger' : 'primary'}" data-act="confirm-ok">${esc(ok)}</button></div>`)
+    S.confirmResolve = resolve
+  })
+}
+
+function newItemModal(kind) {
+  if (!S.projects.length) { toast('Add a project in Settings first.', 'warn'); return openSettings() }
+  S.modal = 'new'
+  const f = S.ui.f
+  openModal(`<h2>New ${kind}</h2>
+  <form id="new-form" data-kind="${kind}" class="grid2">
+    <label class="f" style="grid-column:1/-1"><span>Title (up to 120 characters)</span><input id="n-title" name="title" maxlength="120" required></label>
+    <label class="f"><span>Project</span><select id="n-project" name="projectId" required>${S.projects.map(p => opt(p.id, p.name, f.project || S.projects[0].id)).join('')}</select></label>
+    <label class="f"><span>Priority</span><select id="n-priority" name="priority">${PRIORITIES.map(p => opt(p, PRIORITY_LABEL[p], 'medium')).join('')}</select></label>
+    ${kind === 'task' ? `<label class="f"><span>Assignee</span><select id="n-assignee" name="assigneeId">${opt('', 'Unassigned', f.member)}${activeMembers().map(m => opt(m.id, m.name, f.member)).join('')}</select></label>
+    <label class="f"><span>ETA</span><input type="date" id="n-eta" name="eta"></label>
+    <label class="f" style="grid-column:1/-1"><span>Jira keys or links (optional, comma separated)</span><input id="n-jira" name="jira" placeholder="APP-123, https://…/browse/APP-124"></label>`
+    : `<label class="f" style="grid-column:1/-1"><span>Owner</span><select id="n-owner" name="ownerId">${opt('', 'No owner', '')}${activeMembers().map(m => opt(m.id, m.name, '')).join('')}</select></label>
+    <label class="f" style="grid-column:1/-1"><span>Rationale (optional)</span><textarea id="n-rationale" name="rationale" rows="2"></textarea></label>`}
+    <label class="f" style="grid-column:1/-1"><span>Description</span><textarea id="n-desc" name="description" rows="3"></textarea></label>
+    <div class="actions" style="grid-column:1/-1"><button type="button" class="btn" data-act="close-modal">Cancel</button><button class="btn primary" type="submit">Create ${kind}</button></div>
+  </form>`)
+}
+
+function convertModal(id) {
+  const idea = item(id)
+  if (!idea) return
+  S.modal = 'convert'
+  openModal(`<h2>Convert ${esc(idea.id)} to tasks</h2><p class="muted" style="margin:0">One task per line. Each starts with the idea’s project, priority and description; the idea moves to Converted.</p>
+  <form id="convert-form" data-id="${esc(id)}" class="grid2">
+    <label class="f" style="grid-column:1/-1"><span>Task titles</span><textarea id="c-titles" name="titles" rows="5">${esc(idea.title)}</textarea></label>
+    <label class="f"><span>Assign them to</span><select id="c-assignee" name="assigneeId">${opt('', 'Unassigned', '')}${activeMembers().map(m => opt(m.id, m.name, '')).join('')}</select></label>
+    <label class="f"><span>ETA (optional)</span><input type="date" id="c-eta" name="eta"></label>
+    <div class="actions" style="grid-column:1/-1"><button type="button" class="btn" data-act="close-modal">Cancel</button><button class="btn primary" type="submit">Create tasks</button></div>
+  </form>`)
+}
+
+function reassignAllModal(mid) {
+  const m = member(mid)
+  const open = S.items.filter(i => isOpenTask(i) && !i.archived && i.assigneeId === mid)
+  S.modal = 'reassign'
+  openModal(`<h2>Reassign ${esc(m ? m.name : mid)}’s ${open.length} open task${open.length === 1 ? '' : 's'}</h2>
+  <form id="reassign-form" data-id="${esc(mid)}" class="grid2"><label class="f" style="grid-column:1/-1"><span>To</span><select id="r-to" name="to">${opt('', 'Unassigned', '')}${activeMembers().map(x => opt(x.id, x.name, '')).join('')}</select></label>
+  <div class="actions" style="grid-column:1/-1"><button type="button" class="btn" data-act="close-modal">Cancel</button><button class="btn primary" type="submit">Reassign</button></div></form>`)
+}
+
+function openSettings() {
+  S.modal = 'settings'
+  const s = settings()
+  const used = id => S.items.some(i => i.assigneeId === id || i.ownerId === id || (i.collaboratorIds || []).includes(id) || i.reviewedBy === id || (i.assignmentHistory || []).some(h => h.memberId === id))
+  openModal(`<h2>Settings</h2>
+  <div class="settings-sec"><h3>Team</h3><p class="muted" style="margin:0;font-size:12.5px">Teams are comma separated (e.g. iOS, Flutter). Seniors can be picked as reviewers. Inactive people disappear from pickers but keep their history.</p>
+    ${S.members.sort((a, b) => a.name.localeCompare(b.name)).map(m => `<form class="mrow" data-member="${esc(m.id)}">
+      <input name="name" value="${esc(m.name)}" aria-label="Name" required><input name="email" value="${esc(m.email || '')}" aria-label="Email" placeholder="email"><input name="jiraAccountId" value="${esc(m.jiraAccountId || '')}" aria-label="Jira account id" placeholder="Jira account id"><input name="teams" value="${esc((m.teams || []).join(', '))}" aria-label="Teams" placeholder="Teams">
+      <label><input type="checkbox" name="isSenior" ${m.isSenior ? 'checked' : ''}>Senior</label><label><input type="checkbox" name="active" ${m.active !== false ? 'checked' : ''}>Active</label>
+      <span><button class="btn small" type="submit">Save</button>${used(m.id) ? '' : ` <button class="btn small ghost danger" type="button" data-act="del-member:${esc(m.id)}">Delete</button>`}</span></form>`).join('')}
+    <form class="mrow" data-member="">
+      <input name="name" placeholder="New member name" aria-label="New member name" required><input name="email" placeholder="email" aria-label="Email"><input name="jiraAccountId" placeholder="Jira account id" aria-label="Jira account id"><input name="teams" placeholder="Teams" aria-label="Teams">
+      <label><input type="checkbox" name="isSenior">Senior</label><label><input type="checkbox" name="active" checked>Active</label><span><button class="btn small primary" type="submit">Add</button></span></form>
+  </div>
+  <div class="settings-sec"><h3>Projects</h3>
+    ${S.projects.map(p => `<form class="prow" data-project="${esc(p.id)}"><input name="name" value="${esc(p.name)}" aria-label="Project name" required><input name="jiraProjectKeys" value="${esc((p.jiraProjectKeys || []).join(', '))}" placeholder="Jira project keys" aria-label="Jira project keys"><select name="defaultTeam" aria-label="Default team">${opt('', 'No default team', p.defaultTeam || '')}${teams().map(t => opt(t, t, p.defaultTeam || '')).join('')}</select><button class="btn small" type="submit">Save</button>${S.items.some(i => i.projectId === p.id) ? '<span></span>' : `<button class="btn small ghost danger" type="button" data-act="del-project:${esc(p.id)}">Delete</button>`}</form>`).join('')}
+    <form class="prow" data-project=""><input name="name" placeholder="New project name" aria-label="New project name" required><input name="jiraProjectKeys" placeholder="Jira project keys, e.g. APP" aria-label="Jira project keys"><select name="defaultTeam" aria-label="Default team">${opt('', 'No default team', '')}${teams().map(t => opt(t, t, '')).join('')}</select><button class="btn small primary" type="submit">Add</button><span></span></form>
+  </div>
+  <form class="settings-sec" id="settings-form"><h3>Rules and defaults</h3><div class="grid2">
+    <label class="f"><span>Stale after (days without activity)</span><input type="number" min="1" name="staleDays" value="${esc(s.staleDays)}"></label>
+    <label class="f"><span>WIP warning above (ongoing items)</span><input type="number" min="1" name="wipLimit" value="${esc(s.wipLimit)}"></label>
+    <label class="f"><span>Recently done window (days)</span><input type="number" min="1" name="recentlyDoneDays" value="${esc(s.recentlyDoneDays)}"></label>
+    <label class="f"><span>Time zone</span><input name="timezone" value="${esc(s.timezone)}"></label>
+    <label class="f"><span>Report scope default</span><select name="defaultScope">${['team', 'group', 'project', 'member'].map(k => opt(k, { team: 'Whole team', group: 'Team group', project: 'Project', member: 'Member' }[k], s.reports.defaultScope)).join('')}</select></label>
+    <label class="f"><span>Report period default</span><select name="defaultPeriod">${Object.entries(PERIODS).filter(([k]) => k !== 'custom').map(([k, v]) => opt(k, v, s.reports.defaultPeriod)).join('')}</select></label>
+  </div>
+  <p class="muted" style="margin:0;font-size:12.5px">Jira site: ${s.jira.cloudId ? esc(s.jira.baseUrl || s.jira.cloudId) : 'found on the first refresh'}${S.mcp ? '' : ' · Jira is not connected to this page'}</p>
+  <div class="actions"><button type="button" class="btn" data-act="close-modal">Close</button><button class="btn primary" type="submit">Save rules</button></div></form>`, true)
+}
+
+// ── reports ────────────────────────────────────────────────────────────
+function reportInputs(form) {
+  const kind = form.scopeKind.value
+  return { scope: kind === 'team' ? { kind } : { kind, value: form.scopeValue.value }, period: form.period.value, custom: { from: form.from.value, to: form.to.value } }
+}
+function scopeValues(kind, cur) {
+  if (kind === 'group') return teams().map(t => opt(t, t, cur)).join('')
+  if (kind === 'project') return S.projects.map(p => opt(p.id, p.name, cur)).join('')
+  if (kind === 'member') return S.members.map(m => opt(m.id, m.name, cur)).join('')
+  return opt('', '—', '')
+}
+function openReports(selectId) {
+  S.modal = 'reports'
+  const s = settings()
+  const r = S.reportView || { scope: { kind: s.reports.defaultScope }, period: s.reports.defaultPeriod, custom: {} }
+  const hist = [...S.reports].sort((a, b) => String(b.generatedAt).localeCompare(String(a.generatedAt)))
+  const saved = selectId && S.reports.find(x => x.id === selectId)
+  openModal(`<div class="row-actions" style="align-items:center"><h2 style="margin-right:auto">Reports</h2><button class="btn small ghost" data-act="close-modal" aria-label="Close">✕</button></div>
+  <div class="rep"><aside>
+    <form id="report-form" class="doc">
+      <label class="f"><span>Scope</span><select id="rp-kind" name="scopeKind" data-act-change="scope-kind">${[['team', 'Whole team'], ['group', 'Team group'], ['project', 'Project'], ['member', 'Member']].map(([k, v]) => opt(k, v, r.scope.kind)).join('')}</select></label>
+      <label class="f" ${r.scope.kind === 'team' ? 'hidden' : ''} id="rp-value-wrap"><span>Which</span><select id="rp-value" name="scopeValue">${scopeValues(r.scope.kind, r.scope.value)}</select></label>
+      <label class="f"><span>Period</span><select id="rp-period" name="period" data-act-change="period">${Object.entries(PERIODS).map(([k, v]) => opt(k, v, r.period)).join('')}</select></label>
+      <div class="grid2" id="rp-custom" ${r.period === 'custom' ? '' : 'hidden'}><label class="f"><span>From</span><input type="date" id="rp-from" name="from" value="${esc(r.custom.from || '')}"></label><label class="f"><span>To</span><input type="date" id="rp-to" name="to" value="${esc(r.custom.to || '')}"></label></div>
+      <button class="btn primary" type="submit">Generate and save</button>
+    </form>
+    <div class="history"><b style="font-size:12.5px">History</b>${hist.map(h => `<button data-act="open-report:${esc(h.id)}" class="${saved && saved.id === h.id ? 'on' : ''}">${esc(h.scopeLabel || '')} · ${esc((h.range || {}).label || '')}<br><span class="muted mono">${esc(String(h.generatedAt).slice(0, 16).replace('T', ' '))}</span></button>`).join('') || '<span class="muted" style="font-size:12.5px">No reports yet.</span>'}</div>
+  </aside>
+  <div id="rp-out" class="doc">${saved ? savedReportHtml(saved) : '<p class="muted">Pick a scope and period, then Generate. Every generated report is saved to the history.</p>'}</div></div>`, true)
+}
+function exportButtons(id) {
+  const dis = S.downloads ? '' : 'disabled title="Downloads are not available in this view"'
+  return `<div class="row-actions"><button class="btn small" data-act="export-md:${esc(id)}" ${dis}>Export Markdown</button><button class="btn small" data-act="export-csv:${esc(id)}" ${dis}>Export CSV</button><button class="btn small" data-act="export-pdf:${esc(id)}" ${dis}>Export PDF</button>${S.downloads ? '' : '<span class="muted" style="font-size:12px">Downloads are not available in this view.</span>'}</div>`
+}
+function summaryBlock(doc) {
+  return `<label class="f"><span>Executive summary (editable; saved when you leave the box)</span><textarea id="rp-summary" data-report="${esc(doc.id)}" rows="5" placeholder="3 to 5 plain sentences about this period.">${esc(doc.summary || '')}</textarea></label>
+  ${S.sample ? `<div><button class="btn small" data-act="draft-summary:${esc(doc.id)}">Draft with Claude</button> <span class="muted" style="font-size:12px">Drafted from the numbers below only.</span></div>` : '<p class="muted" style="margin:0;font-size:12px">Drafting with Claude is not available in this view; write the summary yourself.</p>'}`
+}
+function savedReportHtml(doc) {
+  return `<div class="row-actions" style="align-items:baseline"><h3 style="margin:0;margin-right:auto">${esc(doc.scopeLabel)} · ${esc((doc.range || {}).label || '')}</h3><span class="muted mono" style="font-size:12px">generated ${esc(String(doc.generatedAt).slice(0, 16).replace('T', ' '))}</span></div>
+  ${exportButtons(doc.id)}${summaryBlock(doc)}<div class="md" id="rp-md">${mdToHtml(stripSummary(doc.markdown || ''))}</div>`
+}
+function stripSummary(md) { return md.replace(/## Executive summary\n\n[\s\S]*?\n\n(?=## )/, '') }
+function mdInline(s) { return esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>') }
+function mdToHtml(md) {
+  const out = []
+  const lines = md.split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i]
+    if (l.startsWith('# ')) out.push(`<h1>${mdInline(l.slice(2))}</h1>`)
+    else if (l.startsWith('## ')) out.push(`<h2>${mdInline(l.slice(3))}</h2>`)
+    else if (l.startsWith('- ')) { const items = []; while (i < lines.length && lines[i].startsWith('- ')) items.push(`<li>${mdInline(lines[i++].slice(2))}</li>`); i--; out.push(`<ul>${items.join('')}</ul>`) }
+    else if (l.startsWith('|')) { const rows = []; while (i < lines.length && lines[i].startsWith('|')) rows.push(lines[i++]); i--; out.push(`<div class="tw"><table>${rows.filter(r => !/^\|\s*-/.test(r)).map((r, n) => `<tr>${r.split(/(?<!\\)\|/).slice(1, -1).map(c => n === 0 ? `<th>${mdInline(c.trim().replace(/\\\|/g, '|'))}</th>` : `<td>${mdInline(c.trim().replace(/\\\|/g, '|'))}</td>`).join('')}</tr>`).join('')}</table></div>`) }
+    else if (l.trim()) out.push(`<p>${mdInline(l)}</p>`)
+  }
+  return out.join('')
+}
+async function generateReport(form) {
+  const inp = reportInputs(form)
+  if (inp.scope.kind !== 'team' && !inp.scope.value) { toast('Pick which one first.', 'warn'); return }
+  if (inp.period === 'custom' && !(isDate(inp.custom.from) && isDate(inp.custom.to))) { toast('Pick both dates of the custom range.', 'warn'); return }
+  S.reportView = inp
+  const r = computeReport({ items: S.items, events: S.events, members: S.members, projects: S.projects, jira: S.jira, settings: settings(), scope: inp.scope, period: inp.period, custom: inp.custom, today: today() })
+  const doc = { id: `R-${Date.now().toString(36)}`, scope: r.scope, scopeLabel: r.scopeLabel, period: r.period, range: r.range, custom: inp.period === 'custom' ? inp.custom : null, generatedAt: new Date().toISOString(), numbers: r.headline, report: r, summary: '', markdown: reportMarkdown(r, '') }
+  if (S.canWrite && S.db) { try { await put(`reports/${doc.id}`, doc) } catch (e) { toast(`Report not saved: ${e.message || e}`, 'bad') } }
+  else S.reports = [...S.reports, doc]
+  setTimeout(() => openReports(doc.id), 50)
+}
+async function saveSummary(id, text) {
+  const doc = S.reports.find(x => x.id === id)
+  if (!doc || doc.summary === text) return
+  const markdown = reportMarkdown(doc.report, text)
+  doc.summary = text
+  doc.markdown = markdown
+  if (S.canWrite && S.db) { try { await patchDoc(`reports/${id}`, { summary: text, markdown }) } catch (e) { toast(`Summary not saved: ${e.message || e}`, 'bad') } }
+}
+async function draftSummary(id) {
+  const doc = S.reports.find(x => x.id === id)
+  const ta = byId('rp-summary')
+  if (!doc || !S.sample || !ta) return
+  const prompt = `Write the executive summary of a team status report: 3 to 5 sentences of neutral, plain language. No headings, no bullet points, no praise, no speculation. Use only these facts; do not add numbers that are not here.\n\n${summaryFacts(doc.report)}`
+  ta.value = 'Drafting…'
+  try {
+    const res = await S.sample(prompt, { modelTier: 'default', cache: false, onText: ({ text }) => { ta.value = text } })
+    ta.value = res.text.trim()
+    await saveSummary(id, ta.value)
+    toast('Drafted. Edit it as you like; it saves when you leave the box.')
+  } catch (e) {
+    ta.value = doc.summary || ''
+    toast(e && e.code === 'not_granted' ? 'Drafting with Claude was not allowed for this page.' : e && e.code === 'rate_limited' ? 'Too many drafts just now; try again in a minute.' : `Could not draft: ${e.message || e}`, 'warn')
+  }
+}
+function reportFile(doc, ext) { return `team-board-${slugify(doc.scopeLabel)}-${doc.range.from}-to-${doc.range.to}.${ext}` }
+async function exportReport(id, kind) {
+  const doc = S.reports.find(x => x.id === id)
+  if (!doc || !S.downloads) return
+  const ta = byId('rp-summary')
+  if (ta) await saveSummary(id, ta.value)
+  try {
+    if (kind === 'md') await S.downloads.save({ filename: reportFile(doc, 'md'), data: doc.markdown })
+    if (kind === 'csv') {
+      const { csv } = reportCsv({ items: S.items, events: S.events, members: S.members, projects: S.projects, jira: S.jira, settings: settings(), scope: doc.scope, period: doc.period, custom: doc.custom || undefined, today: doc.report.today })
+      await S.downloads.save({ filename: reportFile(doc, 'csv'), data: csv })
+    }
+    if (kind === 'pdf') await S.downloads.save({ filename: reportFile(doc, 'pdf'), data: pdfOf(doc.markdown) })
+    toast('Saved.')
+  } catch (e) { if (!e || e.code !== 'declined') toast(`Not saved: ${e.message || e.code || e}`, 'warn') }
+}
+function pdfOf(md) {
+  const J = window.jspdf && window.jspdf.jsPDF
+  if (!J) throw new Error('the PDF library did not load')
+  const pdf = new J({ unit: 'pt', format: 'a4' })
+  const W = pdf.internal.pageSize.getWidth() - 96
+  const H = pdf.internal.pageSize.getHeight() - 56
+  let y = 56
+  const write = (text, size, bold, gap = 4) => {
+    pdf.setFont('helvetica', bold ? 'bold' : 'normal')
+    pdf.setFontSize(size)
+    for (const line of pdf.splitTextToSize(text, W)) { if (y > H) { pdf.addPage(); y = 56 } pdf.text(line, 48, y); y += size * 1.3 }
+    y += gap
+  }
+  for (const raw of md.split('\n')) {
+    const l = raw.replace(/\*\*(.+?)\*\*/g, '$1')
+    if (raw.startsWith('# ')) write(l.slice(2), 17, true, 6)
+    else if (raw.startsWith('## ')) { y += 6; write(l.slice(3), 12.5, true, 2) }
+    else if (raw.startsWith('- ')) write(`•  ${l.slice(2)}`, 10, false, 1)
+    else if (/^\|\s*-/.test(raw)) continue
+    else if (raw.startsWith('|')) write(raw.split(/(?<!\\)\|/).slice(1, -1).map(c => c.trim().replace(/\\\|/g, '|')).join('   ·   '), 10, false, 1)
+    else if (raw.startsWith('**')) write(l, 10.5, true, 1)
+    else if (raw.trim()) write(l, 10, false, 3)
+  }
+  return pdf.output('arraybuffer')
+}
+
+// ── actions ────────────────────────────────────────────────────────────
+async function act(name, arg, el) {
+  switch (name) {
+    case 'view': S.ui.view = arg; saveUi(); return render()
+    case 'new': return newItemModal(arg)
+    case 'refresh-jira': return refreshJira()
+    case 'reports': return openReports()
+    case 'settings': return openSettings()
+    case 'init':
+      if (!need()) return
+      await put('config/settings', { ...DEFAULT_SETTINGS })
+      if (!S.counters) await put('config/counters', { idea: 0, task: 0 })
+      toast('Settings created. Add your team and projects next.')
+      return openSettings()
+    case 'open': S.drawerId = arg; return renderDrawer()
+    case 'close-drawer': S.drawerId = null; return renderDrawer()
+    case 'close-modal': return closeModal()
+    case 'confirm-ok': { const r = S.confirmResolve; S.confirmResolve = null; const opt = byId('confirm-opt'); const res = { ok: true, option: opt ? opt.checked : false }; closeModal(); if (r) r(res); return }
+    case 'clear-filters': S.ui.f = loadUi().f; S.ui.f = { project: '', team: '', member: '', type: '', priority: '', status: '', flags: [], archived: false, q: '' }; saveUi(); return render()
+    case 'sort': { const s = S.ui.sort; if (s.key !== arg) S.ui.sort = { key: arg, dir: 1 }; else if (s.dir === 1) S.ui.sort = { key: arg, dir: -1 }; else S.ui.sort = { key: '', dir: 1 }; saveUi(); return render() }
+    case 'sel': if (el.checked) S.selected.add(arg); else S.selected.delete(arg); return render()
+    case 'sel-all': { const rows = filtered(); if (el.checked) rows.forEach(r => S.selected.add(r.id)); else S.selected.clear(); return render() }
+    case 'bulk-clear': S.selected.clear(); return render()
+    case 'bulk-archive': {
+      const l = [...S.selected].map(item).filter(Boolean)
+      if (!l.length || !(await confirmBox(`Archive ${l.length} item${l.length === 1 ? '' : 's'}?`, { ok: 'Archive' })).ok) return
+      for (const it of l) await writeChange(it, { archived: true })
+      S.selected.clear(); return render()
+    }
+    case 'list-more': S.listLimit += 200; return render()
+    case 'convert': return convertModal(arg)
+    case 'reassign-all': return reassignAllModal(arg)
+    case 'feed': S.ui.feed = arg; saveUi(); return renderDrawer()
+    case 'archive': { const it = item(arg); if (it) await writeChange(it, { archived: true }); return }
+    case 'restore': { const it = item(arg); if (it) await writeChange(it, { archived: false }); return }
+    case 'delete': {
+      const it = item(arg)
+      if (!it || !need() || !(await confirmBox(`Delete ${it.id} permanently? Its notes and history go too. This cannot be undone.`, { ok: 'Delete permanently', danger: true })).ok) return
+      for (const e of S.events.filter(e => e.itemId === it.id)) await S.db.doc(`events/${e.id}`).delete()
+      await S.db.doc(`items/${it.id}`).delete()
+      S.drawerId = null; toast(`${it.id} deleted.`); return renderDrawer()
+    }
+    case 'queue-top': {
+      const it = item(arg)
+      const q = S.items.filter(i => i.type === 'task' && i.assigneeId === it.assigneeId && i.id !== it.id && i.queueRank).sort(byQueue)
+      return writeChange(it, { queueRank: rankBetween('', q.length ? q[0].queueRank : null) })
+    }
+    case 'link-key': {
+      const it = item(S.drawerId); const input = byId('d-jira')
+      const key = normalizeJiraKey(input.value)
+      if (!key) { toast('That is not a Jira key or issue link.', 'warn'); return }
+      const known = S.projects.flatMap(p => p.jiraProjectKeys || [])
+      if (known.length && !known.includes(key.split('-')[0])) toast(`${key.split('-')[0]} is not one of your projects’ Jira keys; linked anyway.`, 'warn')
+      input.value = ''
+      await writeChange(it, { jiraAdd: [key] })
+      return validateKeys([key])
+    }
+    case 'unlink': { const it = item(S.drawerId); if (it) await writeChange(it, { jiraRemove: [arg] }); return }
+    case 'note-add': {
+      const it = item(S.drawerId); const body = byId('d-note').value.trim(); const tag = byId('d-tag').value || null
+      if (!body || !need()) return
+      const e = noteEvent(it.id, tag, body, ctx())
+      await put(`events/${e.id}`, e)
+      await patchDoc(`items/${it.id}`, { lastActivityAt: e.createdAt, updatedAt: e.createdAt })
+      byId('d-note').value = ''
+      return
+    }
+    case 'note-edit': {
+      const e = S.events.find(x => x.id === arg); const box = byId(`ev-${arg}`)
+      if (!e || !box) return
+      box.querySelector('.body').innerHTML = `<textarea class="inp" id="ne-${esc(arg)}" rows="3">${esc(e.body)}</textarea><div class="row-actions" style="margin-top:4px"><button class="btn small primary" data-act="note-save:${esc(arg)}">Save</button></div>`
+      byId(`ne-${arg}`).focus(); return
+    }
+    case 'note-save': {
+      const e = S.events.find(x => x.id === arg); const ta = byId(`ne-${arg}`)
+      if (!e || !ta || !need()) return
+      const nowIso = new Date().toISOString()
+      await patchDoc(`events/${arg}`, { body: ta.value, editedAt: nowIso })
+      await patchDoc(`items/${e.itemId}`, { lastActivityAt: nowIso })
+      document.activeElement.blur(); return renderDrawer()
+    }
+    case 'note-resolve': {
+      const e = S.events.find(x => x.id === arg)
+      if (!e || !need()) return
+      const nowIso = new Date().toISOString()
+      await patchDoc(`events/${arg}`, { resolved: !e.resolved })
+      const s = systemEvent(e.itemId, e.resolved ? 'blocker_reopened' : 'blocker_resolved', e.resolved ? 'Blocker reopened' : 'Blocker resolved', { noteId: e.id }, ctx())
+      await put(`events/${s.id}`, s)
+      await patchDoc(`items/${e.itemId}`, { lastActivityAt: nowIso })
+      return
+    }
+    case 'open-report': return openReports(arg)
+    case 'draft-summary': return draftSummary(arg)
+    case 'export-md': return exportReport(arg, 'md')
+    case 'export-csv': return exportReport(arg, 'csv')
+    case 'export-pdf': return exportReport(arg, 'pdf')
+    case 'del-member': {
+      if (!need() || !(await confirmBox('Delete this member? They have no history on the board.', { ok: 'Delete', danger: true })).ok) return
+      await S.db.doc(`members/${arg}`).delete(); return openSettings()
+    }
+    case 'del-project': {
+      if (!need() || !(await confirmBox('Delete this project? No items use it.', { ok: 'Delete', danger: true })).ok) return
+      await S.db.doc(`projects/${arg}`).delete(); return openSettings()
+    }
+  }
+}
+
+async function commitField(it, field, el) {
+  const v = el.value
+  if (field === 'title' && !v.trim()) { el.value = it.title; toast('A title is needed.', 'warn'); return }
+  if (['startDate', 'reviewRequestedAt', 'endDate', 'reviewedOn'].includes(field)) return writeChange(it, { dates: { [field]: v || null } })
+  if (field === 'eta') return writeChange(it, { eta: v || null })
+  if (field === 'assigneeId') {
+    const ch = { assigneeId: v || null }
+    if (v && it.status === 'backlog') { const r = await confirmBox(`Assign ${it.id} to ${nameOf(v)}?`, { ok: 'Assign', option: 'Also move it to Assigned' }); if (!r.ok) { el.value = it.assigneeId || ''; return } if (r.option) ch.status = 'assigned' }
+    return writeChange(it, ch)
+  }
+  if (['projectId', 'ownerId', 'reviewedBy'].includes(field)) return writeChange(it, { [field]: v || null })
+  return writeChange(it, { [field]: v })
+}
+
+// ── drag and drop ──────────────────────────────────────────────────────
+async function onDrop(zone, beforeId) {
+  const it = item(S.dragId)
+  S.dragId = null
+  if (!it || !S.canWrite) return
+  const before = beforeId && beforeId !== it.id ? item(beforeId) : null
+  const [kind, a, b] = zone.split(':')
+  if (kind === 'team') {
+    const to = a === 'unassigned' ? null : a
+    if ((it.assigneeId || null) !== to) {
+      const r = await confirmBox(to ? `Reassign ${it.id} to ${nameOf(to)}?` : `Unassign ${it.id}?`, { ok: to ? 'Reassign' : 'Unassign', option: to && it.status === 'backlog' ? 'Also move it to Assigned' : '' })
+      if (!r.ok) return
+      const ch = { assigneeId: to }
+      if (r.option) ch.status = 'assigned'
+      return writeChange(it, ch)
+    }
+    if (b === 'next' && to) {
+      const q = S.items.filter(i => i.type === 'task' && i.assigneeId === to && ['assigned', 'backlog'].includes(i.status) && i.id !== it.id && !i.archived).sort(byQueue)
+      const idx = before ? q.findIndex(x => x.id === before.id) : q.length
+      const prev = idx > 0 ? q[idx - 1] : null
+      return writeChange(it, { queueRank: rankBetween(prev ? prev.queueRank : '', before ? before.queueRank : null) })
+    }
+    if (b === 'ongoing' && !isOngoing(it)) return writeChange(it, { status: 'in_progress' })
+    if (b === 'done' && it.status !== 'done') return writeChange(it, { status: 'done' })
+    return
+  }
+  if (kind === 'stage') {
+    if (it.status !== a) return writeChange(it, { status: a })
+    return reorder(it, before)
+  }
+  if (kind === 'ideas') {
+    if (it.priority !== a) return writeChange(it, { priority: a })
+    return reorder(it, before)
+  }
+  if (kind === 'list') return S.ui.sort.key ? null : reorder(it, before)
+}
+function reorder(it, before) {
+  if (!before) return
+  if (before.priority !== it.priority) { toast('Order is kept within a priority level; change the priority to move it across.', 'warn'); return }
+  const band = S.items.filter(i => i.type === it.type && i.priority === it.priority && i.id !== it.id).sort(byPriority)
+  const idx = band.findIndex(x => x.id === before.id)
+  const prev = idx > 0 ? band[idx - 1] : null
+  return writeChange(it, { rank: rankBetween(prev ? prev.rank : '', before.rank) })
+}
+
+// ── events ─────────────────────────────────────────────────────────────
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-act]')
+  if (!el) { if (e.target.id === 'scrim' && S.modal !== 'confirm') closeModal(); return }
+  if (el.tagName === 'INPUT' && el.type === 'checkbox') e.stopPropagation()
+  const raw = el.dataset.act
+  const i = raw.indexOf(':')
+  act(i < 0 ? raw : raw.slice(0, i), i < 0 ? '' : raw.slice(i + 1), el).catch(err => toast(String(err.message || err), 'bad'))
+})
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { if (!byId('scrim').hidden) closeModal(); else if (S.drawerId) { S.drawerId = null; renderDrawer() } }
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.card[data-act]')) { e.preventDefault(); e.target.click() }
+})
+let qTimer = 0
+document.addEventListener('input', e => {
+  const t = e.target
+  if (t.dataset.filter === 'q') { clearTimeout(qTimer); qTimer = setTimeout(() => { S.ui.f.q = t.value; saveUi(); renderMainOnly() }, 200) }
+})
+function renderMainOnly() { const keep = [...document.querySelectorAll('[data-keep]')].map(el => [el.dataset.keep, el.scrollLeft, el.scrollTop]); byId('app').innerHTML = renderMain(); for (const [k, l, t] of keep) { const el = document.querySelector(`[data-keep="${k}"]`); if (el) { el.scrollLeft = l; el.scrollTop = t } } }
+document.addEventListener('change', async e => {
+  const t = e.target
+  try {
+    if (t.dataset.filter && t.dataset.filter !== 'q') { S.ui.f[t.dataset.filter] = t.value; if (t.dataset.filter === 'type' && S.ui.f.status) S.ui.f.status = ''; saveUi(); return render() }
+    if (t.dataset.filterBool) { S.ui.f[t.dataset.filterBool] = t.checked; saveUi(); return render() }
+    if (t.dataset.flag) { const k = t.dataset.flag; S.ui.f.flags = t.checked ? [...new Set([...S.ui.f.flags, k])] : S.ui.f.flags.filter(x => x !== k); saveUi(); return render() }
+    if (t.dataset.bulk) {
+      const field = t.dataset.bulk; const v = t.value
+      if (!v) return
+      const l = [...S.selected].map(item).filter(Boolean)
+      for (const it of l) {
+        if (field === 'status' && !(it.type === 'task' ? TASK_STAGES : IDEA_STAGES).includes(v)) continue
+        if (field === 'assigneeId' && it.type !== 'task') continue
+        await writeChange(it, { [field]: v === '__none' ? null : v })
+      }
+      toast(`Updated ${l.length} item${l.length === 1 ? '' : 's'}.`); return
+    }
+    if (t.dataset.ideastage) { const it = item(t.dataset.ideastage); if (it) await writeChange(it, { status: t.value }); return }
+    if (t.dataset.ideaowner) { const it = item(t.dataset.ideaowner); if (it) await writeChange(it, { ownerId: t.value || null }); return }
+    if (t.dataset.collab) { const it = item(S.drawerId); const set = new Set(it.collaboratorIds || []); if (t.checked) set.add(t.dataset.collab); else set.delete(t.dataset.collab); return writeChange(it, { collaboratorIds: [...set] }) }
+    if (t.dataset.field) { const it = item(S.drawerId); if (it) await commitField(it, t.dataset.field, t); return }
+    if (t.dataset.actChange === 'scope-kind') { const w = byId('rp-value-wrap'); w.hidden = t.value === 'team'; byId('rp-value').innerHTML = scopeValues(t.value, ''); return }
+    if (t.dataset.actChange === 'period') { byId('rp-custom').hidden = t.value !== 'custom'; return }
+  } catch (err) { toast(String(err.message || err), 'bad') }
+})
+document.addEventListener('focusout', e => {
+  const t = e.target
+  if (t.id === 'rp-summary') saveSummary(t.dataset.report, t.value)
+  if (S.drawerDirty && byId('drawer').contains(t)) setTimeout(() => { if (!byId('drawer').contains(document.activeElement) || !document.activeElement.matches('input, textarea, select')) renderDrawer() }, 0)
+})
+document.addEventListener('submit', async e => {
+  e.preventDefault()
+  const form = e.target
+  try {
+    if (form.id === 'new-form') {
+      const d = Object.fromEntries(new FormData(form))
+      const kind = form.dataset.kind
+      const fields = { title: d.title, description: d.description, projectId: d.projectId, priority: d.priority }
+      if (kind === 'task') Object.assign(fields, { assigneeId: d.assigneeId || null, eta: d.eta || null, jiraKeys: jiraKeysFrom(d.jira) })
+      else Object.assign(fields, { ownerId: d.ownerId || null, rationale: d.rationale })
+      const it = await createItem(kind, fields)
+      closeModal()
+      if (it) { toast(`${it.id} created.`); S.drawerId = it.id; setTimeout(renderDrawer, 300) }
+      return
+    }
+    if (form.id === 'convert-form') {
+      const idea = item(form.dataset.id); const d = Object.fromEntries(new FormData(form))
+      const titles = String(d.titles).split('\n').map(s => s.trim()).filter(Boolean)
+      if (!idea || !titles.length || !need()) return
+      const snap = await S.db.doc('config/counters').get()
+      const res = convertIdea(idea, titles.map(title => ({ title, assigneeId: d.assigneeId || null, eta: d.eta || null })), (snap.exists && snap.data()) || { idea: 0, task: 0 }, ctx())
+      await put('config/counters', res.counters)
+      for (const t of res.tasks) { await put(`items/${t.item.id}`, t.item); for (const ev of t.events) await put(`events/${ev.id}`, ev) }
+      await patchDoc(`items/${idea.id}`, res.ideaPatch)
+      for (const ev of res.ideaEvents) await put(`events/${ev.id}`, ev)
+      closeModal(); toast(`Created ${res.tasks.map(t => t.item.id).join(', ')}.`); return
+    }
+    if (form.id === 'reassign-form') {
+      const to = form.to.value || null
+      for (const it of S.items.filter(i => isOpenTask(i) && !i.archived && i.assigneeId === form.dataset.id)) await writeChange(it, { assigneeId: to })
+      closeModal(); toast('Reassigned.'); return
+    }
+    if (form.id === 'settings-form') {
+      if (!need()) return
+      const d = Object.fromEntries(new FormData(form))
+      const s = settings()
+      try { new Intl.DateTimeFormat('en', { timeZone: d.timezone }) } catch { toast(`“${d.timezone}” is not a time zone name (e.g. Asia/Beirut).`, 'warn'); return }
+      await patchDoc('config/settings', { staleDays: Math.max(1, Number(d.staleDays) || 5), wipLimit: Math.max(1, Number(d.wipLimit) || 3), recentlyDoneDays: Math.max(1, Number(d.recentlyDoneDays) || 14), timezone: d.timezone, reports: { ...s.reports, defaultScope: d.defaultScope, defaultPeriod: d.defaultPeriod } })
+      toast('Rules saved.'); return
+    }
+    if (form.dataset.member !== undefined) {
+      if (!need()) return
+      const d = Object.fromEntries(new FormData(form))
+      const id = form.dataset.member || slugify(d.name)
+      if (!id) return
+      if (!form.dataset.member && S.members.some(m => m.id === id)) { toast('Someone with that name is already on the roster.', 'warn'); return }
+      const doc = { id, name: d.name.trim(), email: (d.email || '').trim(), jiraAccountId: (d.jiraAccountId || '').trim(), teams: String(d.teams || '').split(',').map(s => s.trim().replace(/\s+team$/i, '')).filter(Boolean), isSenior: !!d.isSenior, active: !!d.active }
+      await put(`members/${id}`, doc)
+      toast(form.dataset.member ? 'Saved.' : `${doc.name} added.`)
+      if (!form.dataset.member) setTimeout(openSettings, 300)
+      return
+    }
+    if (form.dataset.project !== undefined) {
+      if (!need()) return
+      const d = Object.fromEntries(new FormData(form))
+      const id = form.dataset.project || slugify(d.name)
+      if (!id) return
+      if (!form.dataset.project && S.projects.some(p => p.id === id)) { toast('A project with that name exists.', 'warn'); return }
+      await put(`projects/${id}`, { id, name: d.name.trim(), jiraProjectKeys: String(d.jiraProjectKeys || '').split(/[\s,]+/).map(s => s.trim().toUpperCase()).filter(Boolean), defaultTeam: d.defaultTeam || '' })
+      toast(form.dataset.project ? 'Saved.' : `${d.name.trim()} added.`)
+      if (!form.dataset.project) setTimeout(openSettings, 300)
+      return
+    }
+    if (form.id === 'report-form') return generateReport(form)
+  } catch (err) { toast(`Not saved: ${err.message || err}`, 'bad') }
+})
+document.addEventListener('dragstart', e => {
+  const el = e.target.closest && e.target.closest('[data-drag]')
+  if (!el) return
+  S.dragId = el.dataset.drag
+  el.classList.add('dragging')
+  e.dataTransfer.effectAllowed = 'move'
+  try { e.dataTransfer.setData('text/plain', S.dragId) } catch {}
+})
+document.addEventListener('dragend', e => { const el = e.target.closest && e.target.closest('[data-drag]'); if (el) el.classList.remove('dragging'); document.querySelectorAll('.drop-on').forEach(x => x.classList.remove('drop-on')) })
+document.addEventListener('dragover', e => {
+  const z = e.target.closest && e.target.closest('[data-drop]')
+  if (!z || !S.dragId) return
+  e.preventDefault()
+  document.querySelectorAll('.drop-on').forEach(x => x !== z && x.classList.remove('drop-on'))
+  z.classList.add('drop-on')
+})
+document.addEventListener('drop', e => {
+  const z = e.target.closest && e.target.closest('[data-drop]')
+  if (!z || !S.dragId) return
+  e.preventDefault()
+  z.classList.remove('drop-on')
+  const b = e.target.closest('[data-before]')
+  onDrop(z.dataset.drop, b && z.contains(b) ? b.dataset.before : null).catch(err => toast(String(err.message || err), 'bad'))
+})
+
+setInterval(() => { if (ready() && !document.activeElement.matches('input, textarea, select')) renderTop() }, 60000)
+boot()
+</script>
